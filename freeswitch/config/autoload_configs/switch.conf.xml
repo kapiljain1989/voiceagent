@@ -1,0 +1,16 @@
+<configuration name="switch.conf" description="Core switch settings">
+  <settings>
+    <!-- RTP port range — pinned tight for KinD hostPort mapping -->
+    <param name="rtp-start-port" value="16000"/>
+    <param name="rtp-end-port" value="16020"/>
+
+    <!-- Logging -->
+    <param name="loglevel" value="debug"/>
+    <param name="colorize-console" value="false"/>
+
+    <!-- Performance — single-process, low-latency settings -->
+    <param name="max-sessions" value="20"/>
+    <param name="sessions-per-second" value="10"/>
+    <param name="rtp-enable-zrtp" value="false"/>
+  </settings>
+</configuration>

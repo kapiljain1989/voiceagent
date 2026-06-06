@@ -1,0 +1,24 @@
+<include>
+  <context name="public">
+
+    <!-- Co-Pilot mode: 2xxx numbers — passive agent assist (SIPREC-style) -->
+    <extension name="copilot">
+      <condition field="destination_number" expression="^(2\d+)$">
+        <action application="answer"/>
+        <!-- Fork caller audio to /siprec -->
+        <action application="set" data="res=${uuid_audio_fork ${uuid} start $${media_gateway_ws_base}/siprec?role=caller&amp;call_id=${uuid} mono 16000}"/>
+        <action application="park"/>
+      </condition>
+    </extension>
+
+    <!-- Interactive AI agent: all other numbers -->
+    <extension name="ai_agent">
+      <condition field="destination_number" expression="^(.+)$">
+        <action application="answer"/>
+        <action application="set" data="res=${uuid_audio_fork ${uuid} start $${media_gateway_ws} mono 16000}"/>
+        <action application="park"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>

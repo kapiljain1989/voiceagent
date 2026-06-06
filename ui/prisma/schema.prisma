@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Agent {
+  id          String   @id @default(uuid())
+  name        String
+  email       String   @unique
+  phone       String?
+  expertise   String[]
+  status      String   @default("available")
+  maxCalls    Int      @default(3)
+  activeCalls Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  calls       Call[]
+}
+
+model Call {
+  id           String    @id @default(uuid())
+  callerNumber String
+  calledNumber String
+  agentId      String?
+  agent        Agent?    @relation(fields: [agentId], references: [id])
+  mode         String
+  status       String
+  startTime    DateTime  @default(now())
+  endTime      DateTime?
+  duration     Int?
+  summary      String?
+  sentiment    String?
+  actionItems  String[]
+  commitments  String[]
+  transcript   Json?
+  suggestions  Json?
+  llmModel     String    @default("claude-3-5-haiku@20241022")
+  recordingUrl String?
+  createdAt    DateTime  @default(now())
+}
+
+model Document {
+  id         String   @id @default(uuid())
+  name       String
+  type       String
+  size       Int
+  category   String
+  chromaId   String?
+  chunks     Int      @default(0)
+  status     String   @default("processing")
+  uploadedAt DateTime @default(now())
+}
+
+model LLMConfig {
+  id           String   @id @default(uuid())
+  name         String
+  provider     String
+  model        String
+  region       String
+  isDefault    Boolean  @default(false)
+  systemPrompt String?
+  maxTokens    Int      @default(512)
+  createdAt    DateTime @default(now())
+}

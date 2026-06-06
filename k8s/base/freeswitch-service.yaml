@@ -1,0 +1,22 @@
+# Headless service for DNS resolution within the cluster.
+# With hostNetwork:true, ports are bound directly on the node —
+# this service exists only for internal discoverability.
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeswitch
+  namespace: voiceagent
+spec:
+  clusterIP: None
+  selector:
+    app: freeswitch
+  ports:
+    - name: sip-udp
+      port: 5060
+      protocol: UDP
+    - name: sip-tcp
+      port: 5060
+      protocol: TCP
+    - name: esl
+      port: 8021
+      protocol: TCP

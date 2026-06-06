@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freeswitch
+  namespace: voiceagent
+  labels:
+    app: freeswitch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: freeswitch
+  template:
+    metadata:
+      labels:
+        app: freeswitch
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: freeswitch
+          image: voiceagent/freeswitch:latest
+          imagePullPolicy: Never
+          env:
+            - name: SBC_ADDRESS
+              valueFrom:
+                configMapKeyRef:
+                  name: sbc-config
+                  key: sbc-address
+            - name: SBC_REGISTER
+              valueFrom:
+                configMapKeyRef:
+                  name: sbc-config
+                  key: sbc-register
+            - name: SBC_USERNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: sbc-config
+                  key: sbc-username
+            - name: SBC_PASSWORD
+              valueFrom:
+                configMapKeyRef:
+                  name: sbc-config
+                  key: sbc-password
+            - name: SBC_AUTH_CALLS
+              valueFrom:
+                configMapKeyRef:
+                  name: sbc-config
+                  key: sbc-auth-calls
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - SYS_NICE
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi

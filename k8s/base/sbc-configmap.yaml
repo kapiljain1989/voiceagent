@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sbc-config
+  namespace: voiceagent
+data:
+  # SBC connection parameters — override at deploy time.
+  # Default: no SBC connected (safe for local dev).
+  sbc-address: "127.0.0.1"
+  sbc-register: "false"
+  sbc-username: "voiceagent"
+  sbc-password: "changeme"
+  sbc-auth-calls: "false"
+  # Set these to your public IP when peering with an external SBC:
+  # external-rtp-ip: "203.0.113.10"
+  # external-sip-ip: "203.0.113.10"

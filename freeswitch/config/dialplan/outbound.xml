@@ -1,0 +1,31 @@
+<include>
+  <context name="outbound">
+
+    <!-- Outbound calls originated by the gateway via ESL.
+         Routes through the SBC gateway trunk. -->
+
+    <!-- PSTN / E.164 numbers — route via SBC -->
+    <extension name="to_sbc">
+      <condition field="destination_number" expression="^(\+?\d{7,15})$">
+        <action application="set" data="effective_caller_id_number=${caller_id_number}"/>
+        <action application="set" data="effective_caller_id_name=${caller_id_name}"/>
+        <action application="bridge" data="sofia/gateway/sbc/$1"/>
+      </condition>
+    </extension>
+
+    <!-- SIP URI — route directly -->
+    <extension name="to_sip_uri">
+      <condition field="destination_number" expression="^(sip:.+)$">
+        <action application="bridge" data="sofia/external/$1"/>
+      </condition>
+    </extension>
+
+    <!-- Local extension (for testing) — loop back to inbound -->
+    <extension name="local_test">
+      <condition field="destination_number" expression="^(\d{3,6})$">
+        <action application="transfer" data="$1 XML public"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>

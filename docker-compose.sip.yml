@@ -1,0 +1,101 @@
+# docker-compose.sip.yml — Full AI Call Center Platform
+#
+# Services: Gateway, FreeSWITCH, Whisper STT, Piper TTS,
+#           PostgreSQL, ChromaDB, Next.js UI
+#
+# Usage:
+#   export EXT_IP=$(ipconfig getifaddr en0)
+#   docker compose -f docker-compose.sip.yml up
+#   Open http://localhost:3000 for the UI
+
+services:
+  gateway:
+    build: gateway/
+    image: voiceagent/gateway:latest
+    user: "0:0"
+    ports:
+      - "8080:8080"
+    environment:
+      - LISTEN_ADDR=:8080
+      - STT_URL=http://whisper:8000/v1/audio/transcriptions
+      - TTS_URL=http://piper:5000
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-${ANTHROPIC_VERTEX_PROJECT_ID}}
+      - GCP_REGION=${GCP_REGION:-${CLOUD_ML_REGION:-us-east5}}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-3-5-haiku@20241022}
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp/adc.json
+      - ESL_HOST=freeswitch
+      - ESL_PORT=8022
+      - ESL_PASSWORD=ClueCon
+      - TTS_AUDIO_DIR=/tmp/tts
+      - CRM_WEBHOOK_URL=${CRM_WEBHOOK_URL:-}
+      - CRM_WEBHOOK_TOKEN=${CRM_WEBHOOK_TOKEN:-}
+      - DATABASE_URL=postgres://voiceagent:voiceagent@postgres:5432/voiceagent?sslmode=disable
+      - CHROMA_URL=http://chromadb:8000
+    volumes:
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-~/.config/gcloud/application_default_credentials.json}:/secrets/gcp/adc.json:ro
+      - tts-audio:/tmp/tts
+    depends_on:
+      - postgres
+      - chromadb
+
+  freeswitch:
+    build: freeswitch/
+    image: voiceagent/freeswitch:latest
+    ports:
+      - "5070:5060/tcp"
+      - "5070:5060/udp"
+      - "20000-20020:20000-20020/udp"
+    depends_on:
+      - gateway
+    volumes:
+      - ./freeswitch/config/sip_profiles/external-local.xml:/usr/local/freeswitch/conf/sip_profiles/external.xml:ro
+      - ./freeswitch/config/autoload_configs/acl.conf.xml:/usr/local/freeswitch/conf/autoload_configs/acl.conf.xml:ro
+      - /tmp/switch-local.xml:/usr/local/freeswitch/conf/autoload_configs/switch.conf.xml:ro
+      - /tmp/vars-local.xml:/usr/local/freeswitch/conf/vars.xml:ro
+      - /tmp/public-compose.xml:/usr/local/freeswitch/conf/dialplan/public.xml:ro
+      - tts-audio:/tmp/tts
+
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-base.en
+
+  piper:
+    image: artibex/piper-http:latest
+    environment:
+      - MODEL_DOWNLOAD_LINK=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/high/en_US-ryan-high.onnx?download=true
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=voiceagent
+      - POSTGRES_USER=voiceagent
+      - POSTGRES_PASSWORD=voiceagent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8200:8000"
+    volumes:
+      - chromadata:/chroma/chroma
+
+  ui:
+    build: ui/
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://voiceagent:voiceagent@postgres:5432/voiceagent
+      - GATEWAY_URL=http://gateway:8080
+      - CHROMA_URL=http://chromadb:8000
+    depends_on:
+      - gateway
+      - postgres
+
+volumes:
+  tts-audio:
+  pgdata:
+  chromadata:

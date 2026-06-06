@@ -1,0 +1,28 @@
+<include>
+  <!-- Network identity -->
+  <X-PRE-PROCESS cmd="set" data="local_ip_v4=auto"/>
+  <X-PRE-PROCESS cmd="set" data="domain=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=$${local_ip_v4}"/>
+  <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${local_ip_v4}"/>
+
+  <!-- RTP port pool -->
+  <X-PRE-PROCESS cmd="set" data="rtp_port_range_start=16000"/>
+  <X-PRE-PROCESS cmd="set" data="rtp_port_range_end=16020"/>
+
+  <!-- Gateway WebSocket target -->
+  <X-PRE-PROCESS cmd="set" data="media_gateway_ws=ws://media-gateway.voiceagent.svc.cluster.local:8080/ws"/>
+  <X-PRE-PROCESS cmd="set" data="media_gateway_ws_base=ws://media-gateway.voiceagent.svc.cluster.local:8080"/>
+
+  <!-- Codec prefs -->
+  <X-PRE-PROCESS cmd="set" data="global_codec_prefs=PCMU,PCMA,G722"/>
+  <X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=PCMU,PCMA,G722"/>
+
+  <!-- SBC trunk configuration — injected by entrypoint from env vars.
+       Defaults are safe no-ops for local dev (no SBC connected). -->
+  <X-PRE-PROCESS cmd="set" data="sbc_address=127.0.0.1"/>
+  <X-PRE-PROCESS cmd="set" data="sbc_register=false"/>
+  <X-PRE-PROCESS cmd="set" data="sbc_username=voiceagent"/>
+  <X-PRE-PROCESS cmd="set" data="sbc_password=changeme"/>
+  <X-PRE-PROCESS cmd="set" data="sbc_realm=$${sbc_address}"/>
+  <X-PRE-PROCESS cmd="set" data="sbc_auth_calls=false"/>
+</include>

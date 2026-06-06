@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+ui/node_modules/
+ui/.next/
+ui/src/generated/
+
+# Build artifacts
+*.exe
+*.out
+gateway/gateway
+test/simcall
+test/livecall
+test/simcopilot
+
+# Environment
+.env
+.env.local
+ui/.env.local
+
+# OS
+.DS_Store
+*.swp
+
+# Docker volumes
+pgdata/
+chromadata/
+
+# Temp files
+/tmp/
+*.wav
+*.tar
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/

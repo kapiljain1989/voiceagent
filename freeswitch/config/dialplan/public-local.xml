@@ -1,0 +1,11 @@
+<include>
+  <context name="public">
+    <extension name="ai_agent">
+      <condition field="destination_number" expression="^(.+)$">
+        <action application="answer"/>
+        <action application="set" data="res=${uuid_audio_fork ${uuid} start ws://192.168.1.156:8080/ws mono 16000}"/>
+        <action application="park"/>
+      </condition>
+    </extension>
+  </context>
+</include>
