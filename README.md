@@ -66,6 +66,9 @@ An open-core, high-performance **Back-to-Back User Agent (B2BUA)** and media pro
 | 8200 | HTTP | Container | ChromaDB vector store | Internal |
 | 3000 | HTTP | Container | Next.js dashboard | User-facing |
 | 8022 | TCP | Container | FreeSWITCH ESL | Internal: gateway only |
+| 6379 | TCP | Container | Redis (session store) | Internal |
+| 9090 | HTTP | Container | Prometheus metrics | Monitoring |
+| 3001 | HTTP | Container | Grafana dashboards | Monitoring |
 
 ---
 
@@ -241,6 +244,59 @@ SBC_ADDRESS=trunk.pstn.twilio.com SBC_REGISTER=true SBC_USERNAME=sid SBC_PASSWOR
 
 ---
 
+## Production Scale Infrastructure
+
+### Horizontal Gateway Scaling (Redis)
+
+The gateway is stateless when `REDIS_URL` is set. Session state, pub/sub for SSE event routing, and distributed counters all run through Redis. Deploy N gateway replicas behind a load balancer.
+
+```bash
+# Enable distributed state
+REDIS_URL=redis://redis:6379/0 docker compose up --scale gateway=3
+```
+
+Falls back to local in-memory store when Redis is not configured — zero-config for development.
+
+### STT/TTS Worker Pools
+
+Scale Whisper and Piper horizontally with comma-separated URLs. The gateway round-robins requests across the pool with automatic health checking and recovery.
+
+```bash
+# 3 Whisper workers
+STT_URL=http://whisper-1:8000/v1/audio/transcriptions,http://whisper-2:8000/v1/audio/transcriptions,http://whisper-3:8000/v1/audio/transcriptions
+
+# 2 Piper workers
+TTS_URL=http://piper-1:5000,http://piper-2:5000
+```
+
+Health checks run every 30s. Unhealthy workers are removed from rotation and auto-recover after cooldown. Pool status: `GET /api/scale/status`
+
+### Rate Limiting & Admission Control
+
+| Control | Default | Description |
+|---------|---------|-------------|
+| **Rate limiter** | 100 req/s per IP, burst 200 | Token bucket with `X-Forwarded-For` support |
+| **Admission controller** | 500 max concurrent sessions | Atomic CAS — rejects new calls when at capacity |
+
+### Prometheus Metrics & Grafana
+
+`GET /metrics` exposes 30+ metrics in Prometheus text format:
+
+| Category | Metrics |
+|----------|---------|
+| **Calls** | total, active, completed, failed |
+| **STT** | requests, errors, avg latency, latency histogram (8 buckets) |
+| **LLM** | requests, errors, avg latency, latency histogram |
+| **TTS** | requests, errors, avg latency, latency histogram |
+| **Security** | robocalls detected/blocked, PII detections |
+| **Actions** | transfers executed, self-service actions, DTMF digits |
+| **Infrastructure** | failover events, webhooks sent/failed, co-pilot suggestions |
+
+- **Prometheus:** http://localhost:9090 (5s scrape interval)
+- **Grafana:** http://localhost:3001 (admin / `voiceagent`)
+
+---
+
 ## Operational Resilience
 
 ### B2BUA Survival State
@@ -310,11 +366,11 @@ Full documentation: [`docs/api-reference.md`](docs/api-reference.md)
 | **LLM** | `/api/llm/configs`, `/api/llm/test` |
 | **Security** | `/api/blocklist`, `/api/robocall/*`, `/api/security/voiceprints`, `/api/security/pii/*` |
 | **Actions** | `/api/actions/webhooks`, `/api/actions/test` |
-| **Infrastructure** | `/api/failover/status`, `/api/dtmf/test`, `/api/stats`, `/healthz` |
+| **Infrastructure** | `/api/failover/status`, `/api/scale/status`, `/api/dtmf/test`, `/api/stats`, `/healthz`, `/metrics` |
 
 ---
 
-## Project Structure (14 Go source files)
+## Project Structure (17 Go source files, 10 services)
 
 ```
 voiceagent/
@@ -332,6 +388,9 @@ voiceagent/
 │   ├── llm.go              # Multi-LLM abstraction (Claude + Gemini streaming)
 │   ├── api.go              # REST API + PostgreSQL (agents, calls, documents)
 │   ├── rag.go              # ChromaDB document chunking + vector RAG query
+│   ├── store.go            # Redis distributed session store + local fallback
+│   ├── metrics.go          # Prometheus /metrics endpoint (30+ metrics)
+│   ├── scale.go            # Worker pool, rate limiter, admission controller
 │   └── Dockerfile          # Multi-stage: Go 1.25 → distroless (15MB binary)
 ├── freeswitch/             # SIP/RTP engine + enterprise SBC profiles
 ├── whisper/                # Local STT container (faster-whisper)
@@ -348,7 +407,8 @@ voiceagent/
 │   ├── quick-setup.md      # 5-minute setup guide
 │   └── blog.md             # Technical deep-dive blog
 ├── test/                   # livecall, simcall, simcopilot, callcenter-live
-├── docker-compose.sip.yml  # Full platform (7 services)
+├── docker-compose.sip.yml  # Full platform (10 services)
+├── prometheus.yml          # Prometheus scrape config
 └── Makefile                # kind-up, build, load, deploy, sbc-config
 ```
 
@@ -373,6 +433,10 @@ voiceagent/
 | Telecom AGC + noise gate | | Yes |
 | Circuit breaker failover | | Yes |
 | Cisco CUBE / AudioCodes profiles | | Yes |
+| Redis distributed sessions | | Yes |
+| Worker pool load balancing | | Yes |
+| Prometheus metrics + Grafana | | Yes |
+| Rate limiting + admission control | | Yes |
 | Air-gapped deployment | | Yes |
 
 ---
