@@ -1,607 +1,363 @@
-# The Telecom-Native AI Gateway
+# VoiceAgent: Telecom-Native AI Media & Signaling Gateway
 
-B2BUA media proxy for enterprise SBCs with built-in RFC 2833 DTMF handling, local G.711 audio leveling, stateful SIP failover protection, PCI/HIPAA-compliant PII masking, and voice biometric fraud detection.
+An open-core, high-performance **Back-to-Back User Agent (B2BUA)** and media proxy written in Go. VoiceAgent bridges legacy enterprise Session Border Controllers (SBCs) directly to multi-modal real-time AI endpoints with sub-50ms media processing latency, native SIPREC session forking, and deterministic SIP failover protection.
 
-An enterprise-grade, NOC-ready AI call center platform. Handles inbound/outbound SIP calls, provides real-time agent coaching with RAG, detects robocalls, executes self-service actions, performs intelligent call transfers with context headers, and generates automated post-call summaries. Deployable on-premises, in private VPCs, or fully air-gapped.
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-7_services-2496ED?logo=docker)](docker-compose.sip.yml)
 
-Built with Go, Next.js, FreeSWITCH, Whisper STT, Piper TTS, Claude/Gemini on Vertex AI, PostgreSQL, and ChromaDB.
+---
 
-## Platform Architecture
+### Core Architecture Capabilities
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Next.js Dashboard (:3000)                             │
-│  ┌──────────┐ ┌──────────┐ ┌──────────────┐ ┌──────────┐ ┌──────────┐     │
-│  │ Command  │ │  Agent   │ │  Live Ops    │ │Knowledge │ │  Config  │     │
-│  │ Center   │ │  Roster  │ │  Co-Pilot    │ │  Base    │ │  Panel   │     │
-│  └──────────┘ └──────────┘ └──────────────┘ └──────────┘ └──────────┘     │
-└───────────────────────────────┬──────────────────────────────────────────────┘
-                                │
-┌───────────────────────────────┼──────────────────────────────────────────────┐
-│                     Go Media Gateway (:8080)                                 │
-│                                                                              │
-│  ┌─── Security & Compliance ─────────────────────────────────────────┐      │
-│  │ Robocall Detection (3-layer)  │  Live PII Masking (PCI/HIPAA)     │      │
-│  │ Voice Biometrics & Fraud      │  G.711/A-law Codec Transcoding    │      │
-│  └───────────────────────────────────────────────────────────────────┘      │
-│                                                                              │
-│  ┌─── Call Handling ─────────────────────────────────────────────────┐      │
-│  │ Interactive AI Agent          │  Co-Pilot Agent Assist (SIPREC)   │      │
-│  │ VAD → Whisper → Claude → TTS │  Dual-leg STT → RAG → Coach      │      │
-│  │ Self-Service Actions (CRM)    │  SIPREC Metadata Parser (RFC 7866)│      │
-│  │ Intelligent SIP Transfer      │  Post-Call Summary → CRM Webhook  │      │
-│  └───────────────────────────────────────────────────────────────────┘      │
-│                                                                              │
-│  ┌─── Reliability ───────────────────────────────────────────────────┐      │
-│  │ Circuit Breakers (LLM/STT/TTS/ESL)  │  Failover State Machine    │      │
-│  │ Sub-ms Failure Detection             │  Auto SIP REFER to Human  │      │
-│  └───────────────────────────────────────────────────────────────────┘      │
-│                                                                              │
-│  REST API: /api/agents /api/calls /api/documents /api/llm /api/stats        │
-│  /api/blocklist /api/robocall /api/security /api/actions /api/failover      │
-└──────────┬──────────┬──────────┬──────────┬──────────┬───────────────────────┘
-           │          │          │          │          │
-     FreeSWITCH  Whisper STT  Piper TTS  PostgreSQL  ChromaDB
-     (:5060)     (:8000)      (:5000)    (:5432)     (:8200)
-```
+- **SIP Protocol Alignment:** Full support for standard SIP signaling (RFC 3261), native `SIPREC` session forking (RFC 7866), context-enriched call transfers (`SIP REFER`), and `ESL` channel control.
+- **Low-Latency Media Transcoding:** In-memory streaming transcoding of G.711 µ-law/A-law (8kHz, 8-bit) directly into raw linear PCM via pre-computed 256-entry lookup tables — sub-1ms per 20ms frame, zero external dependencies.
+- **Network-Level Signal Interception:** Native **RFC 2833 / RFC 4733** RTP event packet parsing for hardware DTMF capture. Goertzel algorithm fallback for inband tone detection on legacy PBX systems.
+- **Telephony-Grade Audio Processing:** Automatic Gain Control (AGC), noise gate, and Comfort Noise Generation (CNG) — purpose-built for degraded 8kHz carrier lines, not clean WebRTC microphone input.
+- **Deterministic Failover:** Circuit breaker per service with atomic state transitions (< 1ms detection). Graceful degradation chain: hold audio → auto-reconnect → SIP REFER to human queue.
 
-## Core Capabilities
+---
 
-### Interactive AI Agent
-
-The AI answers calls directly. Customer speaks naturally, Claude responds with synthesized voice. Supports self-service actions and intelligent escalation.
+## Network Deployment Topology
 
 ```
-Customer → SIP → FreeSWITCH → mod_audio_fork → Gateway /ws
-                                                    │
-                              Robocall screening (3-layer)
-                              PII masking (PCI/HIPAA)
-                              Voice biometric check
-                                                    │
-                                              VAD → Whisper STT
-                                                    │
-                                    Claude (Vertex AI) → action parsing
-                                         │                    │
-                                    [speak]            [api_call / transfer]
-                                         │                    │
-                                  Piper TTS → WAV      CRM API / SIP REFER
-                                         │
-                              ESL uuid_broadcast → FreeSWITCH → caller
+                            [ Public Carrier / PSTN ]
+                                      │
+                              (SIP Trunk / RTP G.711)
+                                      │
+                          [ Enterprise SBC ]
+                          (Cisco CUBE, AudioCodes, Oracle)
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    │                                     │
+          (Direct SIP Trunk)                    (SIPREC Fork / RFC 7866)
+                    │                                     │
+                    ▼                                     ▼
+        ┌───────────────────────┐              ┌───────────────────────┐
+        │   VoiceAgent Gateway  │              │   VoiceAgent Gateway  │
+        │   Mode: Interactive   │              │   Mode: Co-Pilot      │
+        │                       │              │                       │
+        │   ┌─ VAD ──────────┐  │              │   ┌─ callerSTT ────┐ │
+        │   │ Whisper STT    │  │              │   │ agentSTT       │ │
+        │   │ PII Masking    │  │              │   │ RAG (ChromaDB) │ │
+        │   │ Claude/Gemini  │  │              │   │ Claude Coach   │ │
+        │   │ Piper TTS      │  │              │   │ SSE → Dashboard│ │
+        │   └────────────────┘  │              │   └────────────────┘ │
+        │                       │              │                       │
+        │   SIP REFER (failover)│              │   POST → CRM Webhook │
+        └───────────┬───────────┘              └───────────┬───────────┘
+                    │                                       │
+                    ▼                                       ▼
+        [ Human Agent Queue ]                  [ Agent Desktop / UI ]
+        (Cisco/Avaya softphone                 (Next.js :3000)
+         receives X-Transfer headers)
 ```
 
-### Co-Pilot Agent Assist (SIPREC)
+### Port Binding & Network Prerequisites
 
-Silently observes live calls between customers and human agents. Provides real-time coaching suggestions grounded in the knowledge base via RAG.
+| Port | Protocol | Binding | Service | Exposure |
+|------|----------|---------|---------|----------|
+| 5060/5070 | SIP (TCP+UDP) | Host network | FreeSWITCH SIP signaling | Required: inbound/outbound SIP |
+| 20000-20020 | RTP (UDP) | 1:1 mapped | FreeSWITCH RTP media | Required: bidirectional audio |
+| 8080 | HTTP/WS | Container | Go gateway API + WebSocket | Internal: service mesh |
+| 8000 | HTTP | Container | Whisper STT API | Internal |
+| 5000 | HTTP | Container | Piper TTS API | Internal |
+| 5432 | TCP | Container | PostgreSQL | Internal |
+| 8200 | HTTP | Container | ChromaDB vector store | Internal |
+| 3000 | HTTP | Container | Next.js dashboard | User-facing |
+| 8022 | TCP | Container | FreeSWITCH ESL | Internal: gateway only |
 
-```
-Customer ↔ Human Agent (live SIP call)
-                │
-          FreeSWITCH forks audio (caller + agent legs)
-                │
-          Gateway /siprec endpoint
-                │
-      ┌─────────┴─────────┐
-  callerSTT           agentSTT
-  (VAD + Whisper)     (VAD + Whisper)
-      └────────┬───────────┘
-          transcripts (speaker-labeled)
-               │
-     RAG query (ChromaDB) → relevant policy docs injected
-               │
-         coachWorker (Claude with RAG context)
-               │
-      ┌────────┴────────┐
-  SSE events         [on hangup]
-  → Agent dashboard   summaryWorker → call summary + sentiment
-  → UI live ops                    → POST webhook → CRM
-```
+---
 
-### Smart Self-Service Actions
+## Why VoiceAgent? (vs. Cloud Voice Wrappers)
 
-Natural language intent parsing with automatic backend API execution and voice confirmation.
+| Capability | Cloud AI Voice Bots | VoiceAgent |
+|------------|:-------------------:|:----------:|
+| Deploys inside enterprise private network | No | **Yes** |
+| Air-gapped operation (zero internet) | No | **Yes** |
+| Native SIP/RTP protocol handling | No (WebRTC bridge) | **Yes** (B2BUA) |
+| SIPREC dual-stream session recording | No | **Yes** (RFC 7866) |
+| G.711 codec transcoding (no FFmpeg) | No (cloud transcode) | **Yes** (< 1ms LUT) |
+| RFC 2833 hardware DTMF capture | No (audio-based) | **Yes** (100% accuracy) |
+| Telephony-grade AGC/noise gate | No (WebRTC VAD) | **Yes** (8kHz optimized) |
+| PII masking before cloud/recording | No | **Yes** (PCI/HIPAA) |
+| Deterministic SIP failover | No (call drops) | **Yes** (< 1ms detection) |
+| Call transfer with context headers | No | **Yes** (X-Transfer-Summary) |
+| Voice biometric fraud detection | No | **Yes** (spectral fingerprint) |
 
-```
-Customer: "Hey, I need to reschedule my delivery for Thursday at 3 PM"
-    │
-    ▼
-Claude parses → {"type":"api_call","intent":"reschedule",
-                  "api_call":{"endpoint":"/deliveries","method":"PUT",
-                  "payload":{"date":"2026-06-12","time":"15:00"}}}
-    │
-    ▼
-Gateway executes CRM API call
-    │
-    ▼
-AI speaks: "Done! Your delivery is now set for Thursday at 3 PM."
-```
+---
 
-| Customer Says | Intent | Action |
-|---------------|--------|--------|
-| "Reschedule my delivery for Thursday" | `reschedule` | PUT /deliveries |
-| "Cancel my subscription" | `cancel` | POST /subscriptions/cancel |
-| "What's my account balance?" | `check_status` | GET /accounts/balance |
+## Local Lab Quickstart
 
-### Intelligent Call Transfer with Context
+Spin up the complete telecom laboratory — FreeSWITCH SIP engine, Go media gateway, STT, TTS, database, vector store, and dashboard — in a single command.
 
-When the AI detects anger, complexity, or an explicit request for a human, it transfers the call via SIP with custom headers containing the full conversation context. The receiving agent's Cisco/Avaya softphone displays the summary instantly.
-
-```
-Gateway sends ESL transfer with custom SIP headers:
-    X-Transfer-Summary: "Customer upset about $142 billing error. Wants refund."
-    X-Transfer-Reason: angry
-    X-Transfer-Department: retention
-    X-Transfer-Priority: urgent
-    X-Transfer-Transcript: "[customer] overcharged $142 | [agent] checking..."
-```
-
-Department routing: billing→3001, technical→3002, sales→3003, retention→3004, supervisor→3005.
-
-### Robocall Detection (3-Layer)
-
-| Layer | Method | Speed |
-|-------|--------|-------|
-| **Blocklist** | In-memory hash map lookup | < 1ms |
-| **Audio Pattern** | RMS variance, silence ratio, monotone detection | ~2s |
-| **Transcript Keywords** | 28 weighted phrases ("press 1", "auto warranty", "IRS") | After first STT |
-
-Combined weighted scoring with configurable threshold (default 0.7). Auto-block option for high-confidence detections.
-
-### Voice Biometrics & Fraud Detection
-
-Concurrent voice fingerprinting runs alongside the STT pipeline on raw PCM audio. Extracts 32-dimensional spectral features and compares against enrolled profiles using cosine similarity.
-
-- **Fraud detection** — match caller voice against known fraud profiles
-- **Identity verification** — confirm caller matches the account holder's voiceprint
-- **Enrollment API** — register new voiceprints from call audio
-
-### Live PII Masking (PCI/HIPAA Compliance)
-
-Real-time detection and masking of sensitive data in transcripts before they reach the LLM or call recording storage. Audio frames containing PII can be silenced before recording.
-
-```
-Input:  "My card number is 4111 1111 1111 1111 and CVV is 123"
-Output: "My card number is XXXX-XXXX-XXXX-#### and [CVV REDACTED]"
-```
-
-7 detection patterns: credit cards, SSNs, CVVs, dates of birth, account numbers, and spoken variants ("my social security number is...").
-
-### Post-Call Summary & CRM Webhook
-
-On hangup, Claude generates a structured summary automatically POSTed to your CRM:
-
-```json
-{
-  "summary": "Customer called about billing dispute. Agent offered 20% discount.",
-  "action_items": ["Issue refund for $42.50", "Send confirmation email"],
-  "commitments_made": ["Callback within 24 hours"],
-  "sentiment": "negative"
-}
-```
-
-## 4-Layer Enterprise Infrastructure
-
-### Layer 1: Network Isolation (Security)
-
-Network-topology agnostic. Deploys into public cloud, private VPC, on-premises data center, or fully air-gapped environment with zero internet dependency.
+### Prerequisites
 
 ```bash
-kubectl apply -k k8s/overlays/on-prem       # On-premises
-kubectl apply -k k8s/overlays/air-gapped     # Air-gapped (local Ollama LLM)
-```
+# macOS
+brew install docker go node portaudio baresip
 
-Pre-configured SBC profiles for Cisco CUBE and AudioCodes Mediant at `freeswitch/config/sip_profiles/enterprise/`.
-
-### Layer 2: SIPREC Protocol Mastery
-
-Native RFC 7866 SIPREC metadata XML parser. Parses binary session metadata from SBC SIPREC INVITE, anchors dual RTP streams, and resolves participant/stream mappings for diarized transcription. Handles session groups, participant AORs, and stream labels.
-
-### Layer 3: Sub-50ms Codec Transcoding
-
-Pure Go G.711 μ-law/A-law decoder with pre-computed 256-entry lookup tables. Zero-copy, O(1) per-sample transcoding with 8kHz → 16kHz linear interpolation resampling. No FFmpeg, no cloud transcoding service. Includes G.711 encoder for return-path audio and SNR estimation for quality monitoring.
-
-### Layer 4: Deterministic Failover (99.999% Target)
-
-Circuit breaker per service (LLM, STT, TTS, ESL) with atomic state transitions and sub-millisecond failure detection. Background health monitoring with automatic recovery probing.
-
-```
-LLM drops    → "One moment please..." → auto-reconnect → resume
-STT fails    → buffer audio → retry on recovery
-TTS fails    → static tone via ESL fallback
-All services → SIP REFER to human queue with X-Failover headers
-```
-
-Real-time status: `GET /api/failover/status`
-
-## NOC-Grade Infrastructure
-
-### Native DTMF Parsing (RFC 2833/4733)
-
-When ASR fails in noisy environments, callers resort to keypad input. The gateway intercepts DTMF digits directly from RFC 2833 RTP event packets — 100% accurate, no audio processing.
-
-```
-Caller presses: 4-8-2-9-1-0 on phone keypad
-    │
-    ▼
-Gateway intercepts RFC 2833 RTP payload (4 bytes per event)
-    │
-    ▼
-LLM receives: "User typed: 482910"
-```
-
-- Parses event code, end-bit, and duration from the raw packet
-- Inter-digit timeout with automatic sequence flushing
-- Inband DTMF detection fallback via Goertzel algorithm (for legacy PBX without RFC 2833)
-- Captures PINs, account numbers, dates without exposing audio to cloud
-
-### Dynamic Audio Ingress Leveling (Telecom AGC)
-
-Standard web VAD assumes clean microphone input. Telephony audio arrives compressed, degraded, with line static and echo. The telecom audio pipeline processes every frame before STT:
-
-| Stage | Function | Purpose |
-|-------|----------|---------|
-| **AGC** | Automatic Gain Control | Normalizes volume — boosts quiet, tames loud |
-| **Noise Gate** | Background suppression | Kills static, hum, office noise below threshold |
-| **CNG** | Comfort Noise Generation | Replaces harsh silence with natural-sounding hiss |
-
-Smooth gain transitions with configurable attack/release rates prevent clipping. Soft clipping at ±32000 prevents harsh distortion on loud inputs.
-
-### SIP B2BUA Survival State
-
-The gateway acts as a full Back-to-Back User Agent — it controls both sides of the call session. If any backend service fails:
-
-| Situation | Standard AI Bot | This Gateway |
-|-----------|----------------|-------------|
-| Cloud AI API drops | Call goes silent, drops after 10s | Plays hold audio, sends SIP REFER, saves the call |
-| User enters credit card | Captures audio, exposes to cloud logs | Intercepts, masks PII, replaces with silence |
-| Heavy background static | AI constantly interrupts | Telecom AGC + noise gate enables natural turn-taking |
-| DTMF input needed | Tries to "listen" to tone via ASR | Intercepts RFC 2833 packets — 100% accurate |
-| Internet connection lost | Complete failure | Local emergency dialplan + SIP REFER to human queue |
-
-## Services (7 containers)
-
-| Service | Image | Port | Role |
-|---------|-------|------|------|
-| `gateway` | `voiceagent/gateway` | 8080 | Go media gateway with all AI, security, and telecom features |
-| `freeswitch` | `drachtio/drachtio-freeswitch-mrf` | 5070 | SIP/RTP engine, mod_audio_fork |
-| `whisper` | `fedirz/faster-whisper-server` | 8000 | Local STT (faster-whisper-base.en) |
-| `piper` | `artibex/piper-http` | 5000 | Local TTS (en_US-ryan-high) |
-| `postgres` | `postgres:16-alpine` | 5432 | Agents, calls, documents, blocklist, voice prints |
-| `chromadb` | `chromadb/chroma` | 8200 | RAG vector store |
-| `ui` | `voiceagent/ui` | 3000 | Next.js call center dashboard |
-
-## Prerequisites
-
-- Docker Desktop
-- Go 1.22+
-- Node.js 22+
-- gcloud CLI with Application Default Credentials
-- PortAudio for live mic calls (`brew install portaudio`)
-- baresip for SIP calls (`brew install baresip`)
-
-### GCP Requirements
-
-Claude and Gemini on Vertex AI require cloud access. STT, TTS, RAG, robocall detection, PII masking, voice biometrics, and codec transcoding run entirely locally.
-
-```bash
-export ANTHROPIC_VERTEX_PROJECT_ID="your-gcp-project-id"
+# GCP credentials (for Claude/Gemini on Vertex AI only — all other services run locally)
+gcloud auth application-default login
+export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 export CLOUD_ML_REGION="us-east5"
 ```
 
-## Quick Start
+### Deploy
 
 ```bash
+git clone https://github.com/kapiljain1989/voiceagent.git
+cd voiceagent
+
+# Set your host IP for SIP RTP address advertisement in SDP
 export EXT_IP=$(ipconfig getifaddr en0)
+
+# Start all 7 services
 docker compose -f docker-compose.sip.yml up -d
+
+# Verify SIP signaling binding
+nc -z localhost 5070 && echo "SIP: OK"
+
+# Verify gateway
+curl -s http://localhost:8080/healthz
+# → {"status":"ok","sessions":0}
+
+# Open the operations dashboard
 open http://localhost:3000
 ```
 
-## Dashboard Pages
+Your local environment is now accepting inbound SIP INVITEs and routing media through the AI pipeline.
 
-| Page | URL | Description |
-|------|-----|-------------|
-| Command Center | `/` | Stats cards, active calls, recent completions |
-| Agent Roster | `/agents` | Agent CRUD with expertise badges and status |
-| Call History | `/calls` | Paginated call log with sentiment, mode, and robocall badges |
-| Live Operations | `/calls/live` | Real-time transcript + co-pilot suggestions via SSE |
-| Knowledge Base | `/documents` | Document upload, RAG indexing, vector search testing |
-| Configuration | `/settings` | LLM models, system prompts, SBC trunk, blocklist |
-
-## Testing
-
-### Live Call Center Demo
+### Kubernetes Deployment (KinD / On-Prem / Air-Gapped)
 
 ```bash
-cd test && ./callcenter-live.sh
-# Open http://localhost:3000/calls/live → paste Call ID → CONNECT
-# Speak: "I had a burst pipe and water damaged my floor"
-# → Co-pilot: "Section 4.2.1 covers burst pipe damage. $500 deductible."
+# Local KinD cluster
+make all
+
+# Enterprise on-premises (private SIP trunk to Cisco CUBE)
+kubectl apply -k k8s/overlays/on-prem
+
+# Air-gapped (zero internet — local Ollama LLM, local Whisper, local Piper)
+kubectl apply -k k8s/overlays/air-gapped
 ```
 
-### Interactive AI Agent
+---
+
+## Go Concurrency Architecture
+
+The gateway uses Go's goroutine/channel model to manage concurrent media buffers without locks on the hot path. Each call session spawns a pipeline of single-responsibility goroutines connected by typed channels:
+
+### Interactive Mode — 5 goroutines per session
+
+```
+readFromFS ──[chan]──▶ sttPipeline ──[chan]──▶ claudeWorker ──[chan]──▶ ttsWorker ──[chan]──▶ writeToFS
+  (WS reader)          (VAD+Whisper)           (LLM+actions)           (Piper TTS)           (ESL play)
+                       + PII masking           + self-service
+                       + robocall L3           + SIP transfer
+                       + biometrics
+```
+
+### Co-Pilot Mode — 5 goroutines per session
+
+```
+readCaller ──[chan]──▶ callerSTT ──┐
+                                   ├──[chan]──▶ coachWorker ──▶ SSE broadcast
+readAgent  ──[chan]──▶ agentSTT  ──┘             (RAG+Claude)   → agent dashboard
+                                    + PII mask                  → post-call summary
+                                    + robocall                  → CRM webhook
+```
+
+Shutdown propagates via channel-close cascade. Circuit breakers use `sync/atomic` for lock-free state transitions.
+
+---
+
+## Feature Matrix
+
+### Call Processing
+
+| Feature | Description |
+|---------|-------------|
+| **Interactive AI Agent** | Customer speaks → Whisper STT → Claude → Piper TTS → voice response |
+| **Co-Pilot Agent Assist** | SIPREC dual-leg observation → RAG-grounded coaching → SSE to agent |
+| **Self-Service Actions** | Natural language → intent parsing → CRM API execution → voice confirmation |
+| **Intelligent Transfer** | Anger/complexity detection → SIP REFER with X-Transfer-Summary headers |
+| **Post-Call Summary** | Auto-generated summary + action items + sentiment → CRM webhook |
+
+### Security & Compliance
+
+| Feature | Description |
+|---------|-------------|
+| **PII Masking** | 7 patterns (credit card, SSN, CVV, DOB, account) — masks before LLM/recording |
+| **Voice Biometrics** | 32-dim spectral fingerprint — fraud detection + identity verification |
+| **Robocall Detection** | 3-layer: blocklist (< 1ms) + audio pattern + 28 keyword phrases |
+
+### Telecom Infrastructure
+
+| Feature | Description |
+|---------|-------------|
+| **G.711 Transcoding** | Pre-computed 256-entry LUT — O(1) per sample, < 1ms per frame |
+| **RFC 2833 DTMF** | Hardware digit capture from RTP event packets — 100% accurate |
+| **Telecom AGC** | Automatic Gain Control + noise gate + comfort noise (CNG) |
+| **SIPREC Parser** | RFC 7866 metadata XML — participant/stream resolution, diarization labels |
+| **Failover Machine** | Circuit breaker per service — hold audio → reconnect → SIP REFER fallback |
+| **SBC Profiles** | Pre-configured for Cisco CUBE, AudioCodes Mediant |
+
+### Multi-LLM Support
+
+| Provider | Models | Streaming |
+|----------|--------|:---------:|
+| **Claude (Vertex AI)** | claude-3-5-haiku, sonnet, opus | Yes |
+| **Gemini (Vertex AI)** | gemini-2.0-flash, gemini-1.5-pro | Yes |
+| **Ollama (air-gapped)** | llama, mistral, phi | Planned |
+
+---
+
+## SBC Integration
+
+### Enterprise SBC Profiles
+
+Pre-configured profiles at `freeswitch/config/sip_profiles/enterprise/`:
+
+| SBC | Profile | Codecs | Features |
+|-----|---------|--------|----------|
+| **Cisco CUBE** | `cisco-cube.xml` | G.711/G.722/G.729 | TLS, session timers, OPTIONS keepalive |
+| **AudioCodes Mediant** | `audiocodes.xml` | G.711/G.722/G.729 | Registration mode, NAT traversal, rport |
 
 ```bash
-cd test && ./livecall ws://localhost:8080/ws              # WebSocket (mic/speaker)
-cd test && SIP_PORT=5070 ./test-sip-call.sh               # SIP via baresip
+# Configure trunk
+SBC_ADDRESS=cube.internal make sbc-config
+
+# Twilio SIP Trunk
+SBC_ADDRESS=trunk.pstn.twilio.com SBC_REGISTER=true SBC_USERNAME=sid SBC_PASSWORD=token make sbc-config
 ```
-
-### Robocall Detection
-
-```bash
-curl -X POST http://localhost:8080/api/robocall/test \
-  -d '{"text":"We have been trying to reach you about your auto warranty. Press 1."}'
-# → {"score":1.0, "category":"robocall", "keywords":["press 1","auto warranty",...]}
-```
-
-### PII Masking
-
-```bash
-curl -X POST http://localhost:8080/api/security/pii/test \
-  -d '{"text":"My social security number is 123-45-6789"}'
-# → {"masked":"My social security number is XXX-XX-####", "pii_found":true}
-```
-
-### Voice Biometrics
-
-```bash
-curl http://localhost:8080/api/security/voiceprints                    # List prints
-curl -X POST http://localhost:8080/api/security/voiceprints \
-  -d '{"label":"fraud_profile_001","type":"fraud"}'                    # Enroll
-```
-
-### Failover Status
-
-```bash
-curl http://localhost:8080/api/failover/status
-# → {"llm":{"state":"closed","failures":0}, "stt":{...}, "tts":{...}, "esl":{...}}
-```
-
-### Self-Service Actions
-
-```bash
-curl -X POST http://localhost:8080/api/actions/test \
-  -d '{"text":"{\"type\":\"api_call\",\"intent\":\"reschedule\",\"text\":\"Done.\",\"api_call\":{\"endpoint\":\"/deliveries\",\"method\":\"PUT\",\"payload\":{\"date\":\"2026-06-12\"}}}"}'
-
-curl http://localhost:8080/api/actions/webhooks                        # List webhooks
-curl -X POST http://localhost:8080/api/actions/webhooks \
-  -d '{"reschedule":"https://crm.example.com/api"}'                    # Configure
-```
-
-### Simulated Tests (No Microphone)
-
-```bash
-cd test && go run simcall.go                    # Interactive pipeline
-cd test && ./simcopilot localhost:8080           # Co-pilot simulation
-```
-
-## API Reference
-
-### Voice Endpoints
-
-| Endpoint | Protocol | Description |
-|----------|----------|-------------|
-| `/ws` | WebSocket | Interactive AI agent — PCM audio in, TTS audio + events out |
-| `/siprec` | WebSocket | Co-pilot — `?role=caller\|agent&call_id=xxx` |
-| `/siprec/events` | SSE | Agent dashboard — streams transcript/suggestion/summary |
-| `/call` | POST | Outbound call origination via ESL |
-
-### REST API
-
-| Endpoint | Description |
-|----------|-------------|
-| `/api/agents` | Agent CRUD with expertise and status |
-| `/api/calls` | Call history with transcripts and summaries |
-| `/api/calls/active` | Active session counts (interactive + copilot) |
-| `/api/documents` | Document upload and RAG indexing |
-| `/api/documents/search` | RAG vector query |
-| `/api/llm/configs` | LLM model management (Claude/Gemini) |
-| `/api/llm/test` | Test a model with sample prompt |
-| `/api/blocklist` | Robocall blocklist CRUD |
-| `/api/robocall/stats` | Robocall detection metrics |
-| `/api/robocall/test` | Test robocall classification |
-| `/api/security/voiceprints` | Voice biometric enrollment and listing |
-| `/api/security/pii/test` | Test PII masking |
-| `/api/security/pii/config` | PII masking configuration |
-| `/api/actions/webhooks` | Self-service action webhook URLs |
-| `/api/actions/test` | Test action parsing |
-| `/api/failover/status` | Circuit breaker health (all services) |
-| `/api/dtmf/test` | Test DTMF digit parsing |
-| `/api/stats` | Dashboard stats |
-| `/healthz` | Health check |
-
-### SSE Event Types
-
-```json
-{"type":"transcript","speaker":"customer","text":"I need help with my claim"}
-{"type":"suggestion","suggestion":"Policy 4.2.1 covers...","category":"answer","confidence":0.95}
-{"type":"robocall","text":"score=80% keywords=[press 1, auto warranty]"}
-{"type":"pii_masked","text":"Detected 2 PII items: credit_card, cvv"}
-{"type":"action","intent":"reschedule","status":"success"}
-{"type":"transfer","reason":"angry","department":"retention","priority":"urgent"}
-{"type":"summary","summary":"Customer called about...","action_items":[...],"sentiment":"neutral"}
-```
-
-## SBC Connectivity
-
-```bash
-SBC_ADDRESS=sbc.example.com SBC_USERNAME=trunk1 SBC_PASSWORD=s3cret make sbc-config
-```
-
-Enterprise SBC profiles at `freeswitch/config/sip_profiles/enterprise/`:
-- **Cisco CUBE** — G.711/G.722/G.729 codecs, TLS support, session timers
-- **AudioCodes Mediant** — Registration mode, NAT traversal, forced rport
 
 ### Dialplan Routing
 
-| Destination | Mode |
-|-------------|------|
-| `1xxx` | Interactive AI Agent — Claude answers directly |
-| `2xxx` | Co-Pilot Agent Assist — passive observation with suggestions |
+| Destination | Mode | Behavior |
+|-------------|------|----------|
+| `1xxx` | Interactive | AI agent answers, self-service + transfer capable |
+| `2xxx` | Co-Pilot | Passive observation, RAG coaching, post-call summary |
+| `3xxx` | Human Queue | Direct-to-agent (failover target) |
 
-## RAG Knowledge Base
+---
 
-```bash
-curl -X POST http://localhost:8080/api/documents \
-  -d '{"name":"Policy v4.2","category":"policy","content":"Water damage from burst pipes is covered..."}'
+## Operational Resilience
 
-curl -X POST http://localhost:8080/api/documents/search \
-  -d '{"query":"water damage coverage","top_k":3}'
+### B2BUA Survival State
+
+| Failure Scenario | Standard AI Bot | VoiceAgent |
+|------------------|----------------|------------|
+| Cloud AI API drops | Call goes silent, drops | Plays hold audio, SIP REFER, saves the call |
+| User enters credit card | Audio captured to cloud logs | PII masked, audio frames silenced |
+| Heavy background static | AI constantly interrupts | AGC + noise gate enables natural turn-taking |
+| DTMF input needed | Tries to "hear" tone via ASR | Intercepts RFC 2833 packets — 100% accurate |
+| Internet connection lost | Complete failure | Local emergency dialplan + SIP REFER |
+
+### Latency Budget
+
+| Stage | Duration |
+|-------|----------|
+| G.711 → L16 transcoding | < 1ms |
+| RFC 2833 DTMF parsing | < 1ms |
+| Blocklist + PII masking | < 1ms |
+| Circuit breaker detection | < 1ms |
+| AGC + noise gate | < 1ms |
+| VAD silence detection | 500ms |
+| Whisper STT | 200-400ms |
+| RAG query (ChromaDB) | 50-100ms |
+| Claude/Gemini response | 1-2s |
+| Piper TTS synthesis | 200-400ms |
+| **Total: Co-pilot** | **~2s** |
+| **Total: Interactive** | **~3s** |
+
+---
+
+## SDKs
+
+| Language | Package | Install |
+|----------|---------|---------|
+| **Python** | `voiceagent` | `pip install -e sdk/python` |
+| **TypeScript** | `@voiceagent/sdk` | `cd sdk/typescript && npm install && npm run build` |
+
+```python
+# Python
+from voiceagent import VoiceAgentClient
+client = VoiceAgentClient("http://localhost:8080")
+results = client.rag_search("water damage coverage")
+pii = client.test_pii("My SSN is 123-45-6789")
 ```
 
-During co-pilot calls, the system queries ChromaDB with each customer utterance, retrieves matching document chunks, and injects them as context into Claude's coaching prompt.
-
-## Multi-LLM Support
-
-Unified `LLMClient` interface supporting both Claude and Gemini on Vertex AI with streaming and non-streaming modes.
-
-```bash
-curl -X POST http://localhost:8080/api/llm/test \
-  -d '{"provider":"anthropic-vertex","model":"claude-3-5-haiku@20241022","prompt":"Hello"}'
-
-curl -X POST http://localhost:8080/api/llm/test \
-  -d '{"provider":"gemini-vertex","model":"gemini-2.0-flash","prompt":"Hello"}'
+```typescript
+// TypeScript
+import { VoiceAgentClient } from "@voiceagent/sdk";
+const client = new VoiceAgentClient("http://localhost:8080");
+const results = await client.ragSearch("water damage");
+const cleanup = client.streamEvents("call-id", (e) => console.log(e));
 ```
 
-## CRM Webhook
+---
 
-```bash
-export CRM_WEBHOOK_URL=https://hooks.salesforce.com/services/...
-export CRM_WEBHOOK_TOKEN=Bearer_xxx
-```
+## API Surface (25+ endpoints)
 
-On call end, POSTs a structured JSON with conversation ID, duration, full transcript, summary, action items, commitments made, sentiment, and suggestions given.
+Full documentation: [`docs/api-reference.md`](docs/api-reference.md)
 
-## Project Structure
+| Category | Endpoints |
+|----------|-----------|
+| **Voice** | `/ws` (WebSocket), `/siprec` (WebSocket), `/siprec/events` (SSE), `/call` (POST) |
+| **Agents** | `/api/agents` (CRUD) |
+| **Calls** | `/api/calls`, `/api/calls/active` |
+| **Documents** | `/api/documents`, `/api/documents/search` |
+| **LLM** | `/api/llm/configs`, `/api/llm/test` |
+| **Security** | `/api/blocklist`, `/api/robocall/*`, `/api/security/voiceprints`, `/api/security/pii/*` |
+| **Actions** | `/api/actions/webhooks`, `/api/actions/test` |
+| **Infrastructure** | `/api/failover/status`, `/api/dtmf/test`, `/api/stats`, `/healthz` |
+
+---
+
+## Project Structure (14 Go source files)
 
 ```
 voiceagent/
 ├── gateway/
-│   ├── main.go             # Media gateway, WebSocket, VAD, ESL, interactive pipeline
-│   ├── siprec.go           # Co-pilot: dual-leg STT, coach worker, summary, webhook
+│   ├── main.go             # B2BUA core: WebSocket, VAD, ESL, session orchestration
+│   ├── siprec.go           # SIPREC co-pilot: dual-leg STT, coach worker, summary
 │   ├── siprec_meta.go      # RFC 7866 SIPREC metadata XML parser
-│   ├── robocall.go         # 3-layer robocall detection (blocklist, audio, keywords)
-│   ├── security.go         # Voice biometrics + PII masking (PCI/HIPAA)
-│   ├── actions.go          # Self-service actions + intelligent call transfer
+│   ├── codec.go            # G.711 μ-law/A-law LUT transcoding + resampler
+│   ├── dtmf.go             # RFC 2833/4733 DTMF parsing + Goertzel inband
+│   ├── agc.go              # AGC + noise gate + comfort noise generation
 │   ├── failover.go         # Circuit breakers + deterministic failover state machine
-│   ├── codec.go            # G.711 μ-law/A-law transcoding with lookup tables
-│   ├── dtmf.go             # RFC 2833/4733 DTMF parsing + Goertzel inband detection
-│   ├── agc.go              # Automatic Gain Control + noise gate + comfort noise
-│   ├── llm.go              # Multi-LLM abstraction (Claude + Gemini on Vertex AI)
-│   ├── api.go              # REST API (agents, calls, documents, stats, LLM config)
-│   ├── rag.go              # ChromaDB document chunking + RAG query
-│   ├── go.mod / go.sum
-│   └── Dockerfile
-├── freeswitch/
-│   ├── Dockerfile
-│   ├── entrypoint.sh
-│   └── config/
-│       ├── dialplan/               # 1xxx=AI agent, 2xxx=co-pilot, outbound routing
-│       ├── sip_profiles/           # Standard + enterprise (Cisco CUBE, AudioCodes)
-│       └── autoload_configs/       # mod_audio_fork, sofia, ACL, ESL
-├── whisper/
-│   └── Dockerfile
-├── ui/
-│   ├── src/app/                    # Next.js pages (dashboard, agents, calls, docs, settings)
-│   ├── src/components/             # Sidebar, cards, transcript viewer
-│   ├── prisma/schema.prisma        # PostgreSQL schema
-│   └── Dockerfile
-├── test/
-│   ├── livecall.go                 # Real mic/speaker voice call
-│   ├── callcenter-live.sh          # Full call center demo with mic
-│   ├── simcall.go / simcopilot.go  # Automated pipeline tests
-│   └── test-sip-call.sh            # SIP call via baresip
+│   ├── robocall.go         # 3-layer robocall detection (blocklist, audio, keywords)
+│   ├── security.go         # Voice biometrics (spectral fingerprint) + PII masking
+│   ├── actions.go          # Self-service intent execution + SIP REFER transfer
+│   ├── llm.go              # Multi-LLM abstraction (Claude + Gemini streaming)
+│   ├── api.go              # REST API + PostgreSQL (agents, calls, documents)
+│   ├── rag.go              # ChromaDB document chunking + vector RAG query
+│   └── Dockerfile          # Multi-stage: Go 1.25 → distroless (15MB binary)
+├── freeswitch/             # SIP/RTP engine + enterprise SBC profiles
+├── whisper/                # Local STT container (faster-whisper)
+├── ui/                     # Next.js dashboard (6 pages, shadcn/ui)
+├── sdk/
+│   ├── python/             # pip-installable Python SDK
+│   └── typescript/         # npm TypeScript SDK
 ├── k8s/
-│   ├── base/                       # Kustomize base manifests
-│   └── overlays/
-│       ├── on-prem/                # Enterprise on-premises deployment
-│       ├── private-vpc/            # Private VPC deployment
-│       └── air-gapped/            # Zero-internet deployment (local Ollama LLM)
-├── docker-compose.sip.yml          # Full platform (7 services)
-├── kind-config.yaml
-├── Makefile
-└── README.md
+│   ├── base/               # Kustomize base manifests
+│   └── overlays/           # on-prem, private-vpc, air-gapped
+├── docs/
+│   ├── api-reference.md    # Complete API documentation
+│   ├── quick-setup.md      # 5-minute setup guide
+│   └── blog.md             # Technical deep-dive blog
+├── test/                   # livecall, simcall, simcopilot, callcenter-live
+├── docker-compose.sip.yml  # Full platform (7 services)
+└── Makefile                # kind-up, build, load, deploy, sbc-config
 ```
 
-## Configuration
+---
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LISTEN_ADDR` | `:8080` | Gateway listen address |
-| `STT_URL` | `http://whisper:8000/v1/audio/transcriptions` | Whisper STT endpoint |
-| `TTS_URL` | `http://piper:5000` | Piper TTS endpoint |
-| `GCP_PROJECT_ID` | from `ANTHROPIC_VERTEX_PROJECT_ID` | Vertex AI project |
-| `GCP_REGION` | from `CLOUD_ML_REGION` or `us-east5` | Vertex AI region |
-| `CLAUDE_MODEL` | `claude-3-5-haiku@20241022` | Default LLM model |
-| `DATABASE_URL` | | PostgreSQL connection |
-| `CHROMA_URL` | | ChromaDB endpoint for RAG |
-| `CRM_WEBHOOK_URL` | | POST call summaries on hangup |
-| `CRM_WEBHOOK_TOKEN` | | Bearer token for webhook auth |
-| `ACTION_RESCHEDULE_URL` | | Self-service reschedule webhook |
-| `ACTION_CANCEL_URL` | | Self-service cancel webhook |
-| `ACTION_STATUS_URL` | | Self-service status check webhook |
+## Open-Core Licensing
 
-TTS voice: `en_US-ryan-high` (Piper). Full list at [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
-
-## Pipeline Internals
-
-### Interactive Mode (5 goroutines)
-
-```
-readFromFS ──pcmIn──▶ sttPipeline ──transcripts──▶ claudeWorker ──sentences──▶ ttsWorker ──pcmOut──▶ writeToFS
-                      (VAD+Whisper)  + PII mask     (action parse)             (Piper)               (ESL)
-                      + robocall L3  + biometrics   + self-service
-                                                    + transfer
-```
-
-### Co-Pilot Mode (5 goroutines)
-
-```
-readCaller ──pcmCaller──▶ callerSTT ──┐
-                                      ├──transcripts──▶ coachWorker ──▶ SSE → agent dashboard
-readAgent  ──pcmAgent───▶ agentSTT  ──┘  + PII mask     (RAG+Claude)   → post-call summary → CRM
-                                         + robocall L3
-```
-
-### Failover Chain
-
-```
-LLM circuit open     → "One moment please..." → reconnect → resume
-STT circuit open     → buffer audio → retry on half-open probe
-TTS circuit open     → static tone via ESL
-All circuits open    → SIP REFER to human queue (ext 3000)
-                       with X-Failover-Summary headers
-```
-
-### Latency Profile
-
-| Stage | Duration |
-|-------|----------|
-| Blocklist check | < 1ms |
-| G.711 → L16 transcoding | < 1ms |
-| VAD silence detection | 500ms |
-| Whisper transcription | 200-400ms |
-| PII masking | < 1ms |
-| Robocall keyword check | < 1ms |
-| RAG query (ChromaDB) | 50-100ms |
-| Claude/Gemini response | 1-2s |
-| Piper TTS synthesis | 200-400ms |
-| Circuit breaker failover | < 1ms |
-| **Co-pilot (speech → suggestion)** | **~2s** |
-| **Interactive (speech → voice)** | **~3s** |
-
-## Deployment Modes
-
-| Mode | Network | LLM | Command |
-|------|---------|-----|---------|
-| Docker Compose | Local/dev | Vertex AI | `docker compose up` |
-| KinD | Kubernetes local | Vertex AI | `make all` |
-| On-Premises | Enterprise DC | Vertex AI | `kubectl apply -k k8s/overlays/on-prem` |
-| Air-Gapped | No internet | Local Ollama | `kubectl apply -k k8s/overlays/air-gapped` |
-
-## Open-Core Model
-
-| Capability | Open Source | Enterprise |
-|------------|:----------:|:----------:|
-| SIP-to-WebSocket gateway | Yes | |
+| Layer | Open Source (GitHub) | Enterprise License |
+|-------|:--------------------:|:------------------:|
+| SIP-to-WebSocket B2BUA | Yes | |
 | Interactive AI agent | Yes | |
 | Co-pilot agent assist | Yes | |
 | Multi-LLM (Claude/Gemini) | Yes | |
@@ -609,27 +365,25 @@ All circuits open    → SIP REFER to human queue (ext 3000)
 | Robocall detection | Yes | |
 | SIPREC RFC 7866 parser | | Yes |
 | PII masking (PCI/HIPAA) | | Yes |
-| Voice biometrics & fraud | | Yes |
-| Self-service actions | | Yes |
-| Intelligent call transfer | | Yes |
-| G.711 codec transcoding | | Yes |
-| Failover state machine | | Yes |
-| Cisco CUBE / AudioCodes profiles | | Yes |
+| Voice biometrics | | Yes |
+| Self-service actions + transfers | | Yes |
+| G.711 LUT transcoding | | Yes |
 | RFC 2833 DTMF parsing | | Yes |
 | Telecom AGC + noise gate | | Yes |
-| B2BUA survival state | | Yes |
+| Circuit breaker failover | | Yes |
+| Cisco CUBE / AudioCodes profiles | | Yes |
 | Air-gapped deployment | | Yes |
 
-## Observability
+---
 
-```bash
-docker compose -f docker-compose.sip.yml logs -f gateway
-docker compose -f docker-compose.sip.yml logs -f freeswitch
-docker compose -f docker-compose.sip.yml logs -f whisper
-```
+## Documentation
 
-## Cleanup
+| Document | Description |
+|----------|-------------|
+| [`docs/quick-setup.md`](docs/quick-setup.md) | 5-minute setup guide with prerequisites |
+| [`docs/api-reference.md`](docs/api-reference.md) | Complete API documentation (25+ endpoints) |
+| [`docs/blog.md`](docs/blog.md) | Technical deep-dive: architecture, protocol handling, enterprise positioning |
 
-```bash
-docker compose -f docker-compose.sip.yml down -v
-```
+---
+
+*Built for network engineers who ship infrastructure, not web developers who ship wrappers.*
