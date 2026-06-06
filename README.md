@@ -1,6 +1,6 @@
 # AI Media Gateway — Call Center Platform
 
-An AI-powered call center platform that handles inbound/outbound SIP voice calls, provides real-time agent assist with RAG-powered knowledge retrieval, and generates automated post-call summaries. Built with Go, Next.js, FreeSWITCH, Whisper STT, Piper TTS, Claude/Gemini on Vertex AI, PostgreSQL, and ChromaDB.
+An AI-powered call center platform that handles inbound/outbound SIP voice calls, provides real-time agent assist with RAG-powered knowledge retrieval, detects and blocks robocalls, and generates automated post-call summaries with CRM integration. Built with Go, Next.js, FreeSWITCH, Whisper STT, Piper TTS, Claude/Gemini on Vertex AI, PostgreSQL, and ChromaDB.
 
 ## Platform Overview
 
@@ -16,31 +16,38 @@ An AI-powered call center platform that handles inbound/outbound SIP voice calls
 ┌───────────────────────────────┼──────────────────────────────────────────────┐
 │                     Go Media Gateway (:8080)                                 │
 │                                                                              │
+│  Robocall Detection (3-layer)                                                │
+│  ┌─────────────────────────────────────────────────────────────┐             │
+│  │ Layer 1: Blocklist (< 1ms)  →  Layer 2: Audio Pattern (2s) │             │
+│  │ → Layer 3: Transcript Keywords (after STT)                  │             │
+│  └─────────────────────────────────────────────────────────────┘             │
+│                                                                              │
 │  Mode 1: Interactive AI Agent        Mode 2: Co-Pilot Agent Assist           │
 │  ┌─────────────────────────┐         ┌─────────────────────────┐             │
 │  │ /ws — WebSocket audio   │         │ /siprec — Dual-leg audio │            │
-│  │ readFromFS → sttPipeline│         │ callerSTT + agentSTT    │             │
-│  │ → claudeWorker → TTS   │         │ → coachWorker (RAG)     │             │
-│  │ → writeToFS (playback) │         │ → SSE suggestions       │             │
-│  └─────────────────────────┘         │ → Post-call summary     │             │
-│                                      │ → CRM webhook           │             │
-│  REST API                            └─────────────────────────┘             │
+│  │ VAD → Whisper → Claude  │         │ callerSTT + agentSTT    │             │
+│  │ → Piper TTS → playback  │         │ → RAG → coachWorker     │             │
+│  └─────────────────────────┘         │ → SSE → Post-call → CRM │             │
+│                                      └─────────────────────────┘             │
+│  REST API                                                                    │
 │  /api/agents  /api/calls  /api/documents  /api/llm  /api/stats              │
-│  /call (ESL originate)  /healthz                                             │
+│  /api/blocklist  /api/robocall/stats  /call (ESL)  /healthz                 │
 └──────────┬──────────┬──────────┬──────────┬──────────┬───────────────────────┘
            │          │          │          │          │
      FreeSWITCH  Whisper STT  Piper TTS  PostgreSQL  ChromaDB
      (:5060)     (:8000)      (:5000)    (:5432)     (:8200)
 ```
 
-## Two Operating Modes
+## Three Operating Modes
 
 ### Mode 1: Interactive AI Agent
 
-The AI answers calls directly — customer speaks, Claude responds with synthesized voice.
+The AI answers calls directly. Customer speaks, Claude responds with synthesized voice.
 
 ```
-Customer → SIP → FreeSWITCH → mod_audio_fork → Gateway WebSocket
+Customer → SIP → FreeSWITCH → mod_audio_fork → Gateway /ws
+                                                    │
+                              Robocall screening (3-layer)
                                                     │
                                               VAD → Whisper STT
                                                     │
@@ -48,7 +55,7 @@ Customer → SIP → FreeSWITCH → mod_audio_fork → Gateway WebSocket
                                                     │
                                               Piper TTS → WAV
                                                     │
-                                    ESL uuid_broadcast → FreeSWITCH → Customer hears Claude
+                              ESL uuid_broadcast → FreeSWITCH → Customer hears Claude
 ```
 
 ### Mode 2: Co-Pilot Agent Assist (SIPREC)
@@ -65,30 +72,45 @@ Customer ↔ Human Agent (live SIP call)
       ┌─────────┴─────────┐
   callerSTT           agentSTT
   (VAD + Whisper)     (VAD + Whisper)
-      │                    │
       └────────┬───────────┘
           transcripts (speaker-labeled)
                │
-     RAG query (ChromaDB) → relevant policy docs
+     RAG query (ChromaDB) → relevant policy docs injected
                │
          coachWorker (Claude with RAG context)
                │
       ┌────────┴────────┐
   SSE events         [on hangup]
-  → Agent dashboard   summaryWorker
-  → UI transcript     → call summary + sentiment
-                      → POST webhook → CRM
+  → Agent dashboard   summaryWorker → call summary + sentiment
+  → UI live transcript              → POST webhook → CRM
 ```
+
+### Mode 3: Robocall Detection
+
+Three-layer spam filtering runs on every inbound call before it reaches the agent or AI pipeline.
+
+| Layer | Method | Speed | Accuracy |
+|-------|--------|-------|----------|
+| **Layer 1** | Blocklist lookup | < 1ms | 100% (known numbers) |
+| **Layer 2** | Audio pattern analysis | ~2s | Detects monotone/pre-recorded audio |
+| **Layer 3** | Transcript keyword matching | After first STT | 28 robocall phrase patterns |
+
+**Detection signals:**
+- Blocklist hit (number previously flagged)
+- Low RMS variance (monotone/pre-recorded voice)
+- High silence ratio (dead air padding)
+- Keyword matches: "press 1", "auto warranty", "IRS", "your Amazon account", etc.
+- Combined weighted score with configurable threshold (default 0.7)
 
 ## Services (7 containers)
 
 | Service | Image | Port | Role |
 |---------|-------|------|------|
-| `gateway` | `voiceagent/gateway` | 8080 | Go WebSocket gateway, REST API, ESL client, RAG |
+| `gateway` | `voiceagent/gateway` | 8080 | Go media gateway, REST API, ESL client, RAG, robocall detection |
 | `freeswitch` | `drachtio/drachtio-freeswitch-mrf` | 5070 | SIP/RTP engine, mod_audio_fork |
 | `whisper` | `fedirz/faster-whisper-server` | 8000 | Local STT (faster-whisper-base.en) |
 | `piper` | `artibex/piper-http` | 5000 | Local TTS (en_US-ryan-high, 16kHz) |
-| `postgres` | `postgres:16-alpine` | 5432 | Agents, calls, documents, LLM configs |
+| `postgres` | `postgres:16-alpine` | 5432 | Agents, calls, documents, blocklist, LLM configs |
 | `chromadb` | `chromadb/chroma` | 8200 | RAG vector store for document retrieval |
 | `ui` | `voiceagent/ui` | 3000 | Next.js call center dashboard |
 
@@ -103,7 +125,7 @@ Customer ↔ Human Agent (live SIP call)
 
 ### GCP Requirements
 
-Only Claude/Gemini on Vertex AI require cloud access. STT, TTS, and RAG run entirely locally.
+Claude and Gemini on Vertex AI require cloud access. STT, TTS, RAG, and robocall detection run entirely locally.
 
 ```bash
 export ANTHROPIC_VERTEX_PROJECT_ID="your-gcp-project-id"
@@ -129,16 +151,16 @@ open http://localhost:3000
 |------|-----|-------------|
 | Command Center | `/` | Stats cards, active calls, recent completions |
 | Agent Roster | `/agents` | Agent CRUD with expertise badges and status |
-| Call History | `/calls` | Paginated call log with sentiment and mode filters |
-| Live Operations | `/calls/live` | Real-time transcript + co-pilot suggestions (SSE) |
-| Knowledge Base | `/documents` | Document upload, RAG indexing, search testing |
-| Configuration | `/settings` | LLM models (Claude/Gemini), system prompts, SBC trunk |
+| Call History | `/calls` | Paginated call log with sentiment, mode, and robocall badges |
+| Live Operations | `/calls/live` | Real-time transcript + co-pilot suggestions via SSE |
+| Knowledge Base | `/documents` | Document upload, RAG indexing, vector search testing |
+| Configuration | `/settings` | LLM models, system prompts, SBC trunk, blocklist management |
 
 ## Testing
 
 ### Live Call Center Demo (Co-Pilot Mode)
 
-The full call center scenario — you speak as the customer, the co-pilot provides real-time suggestions on screen.
+Speak as the customer while the co-pilot provides real-time suggestions on screen.
 
 ```bash
 # 1. Index knowledge base documents
@@ -155,15 +177,13 @@ cd test && ./callcenter-live.sh
 # 4. Copy the Call ID from terminal, paste in the UI, click CONNECT
 
 # 5. Speak: "I had a burst pipe and water damaged my floor"
-#    → Co-pilot shows: "Section 4.2.1 covers burst pipe damage. $500 deductible."
+#    → Co-pilot: "Section 4.2.1 covers burst pipe damage. $500 deductible."
 ```
 
 ### Interactive AI Agent (Voice Call)
 
-Call the AI directly — it responds with Claude's voice through your speaker.
-
 ```bash
-# WebSocket mode (simplest — uses mic/speaker directly)
+# WebSocket mode (mic/speaker, no SIP)
 cd test && ./livecall ws://localhost:8080/ws
 
 # SIP mode (via baresip softphone)
@@ -171,16 +191,35 @@ cd test && SIP_PORT=5070 ./test-sip-call.sh
 # Type: /dial 1000
 ```
 
-### Simulated Pipeline Test (No Microphone)
+### Robocall Detection Test
 
 ```bash
-cd test && go run simcall.go
+# Add a number to the blocklist
+curl -X POST http://localhost:8080/api/blocklist \
+  -d '{"number":"+15551234567","reason":"known_robocaller"}'
+
+# Test keyword detection
+curl -X POST http://localhost:8080/api/robocall/test \
+  -d '{"text":"We have been trying to reach you about your auto warranty. Press 1 to speak to a representative."}'
+# → {"score":1.0, "category":"robocall", "keywords":["press 1","auto warranty","we have been trying to reach you"]}
+
+# Test clean speech
+curl -X POST http://localhost:8080/api/robocall/test \
+  -d '{"text":"Hi, I had a burst pipe and my floor is damaged. Can you help me?"}'
+# → {"score":0.0, "category":"human"}
+
+# View robocall stats
+curl http://localhost:8080/api/robocall/stats
+
+# List blocklist
+curl http://localhost:8080/api/blocklist
 ```
 
-### Co-Pilot Simulation (No Microphone)
+### Simulated Pipeline Tests (No Microphone)
 
 ```bash
-cd test && ./simcopilot localhost:8080
+cd test && go run simcall.go        # Interactive pipeline test
+cd test && ./simcopilot localhost:8080  # Co-pilot simulation
 ```
 
 ## API Reference
@@ -189,30 +228,34 @@ cd test && ./simcopilot localhost:8080
 
 | Endpoint | Protocol | Description |
 |----------|----------|-------------|
-| `/ws` | WebSocket | Interactive AI agent — send PCM audio, receive TTS audio + transcript events |
-| `/siprec` | WebSocket | Co-pilot — `?role=caller\|agent&call_id=xxx`, receive audio legs |
-| `/siprec/events` | SSE | Agent dashboard — `?call_id=xxx`, streams transcript/suggestion/summary events |
-| `/call` | POST | Originate outbound call via ESL (`{"to":"+15551234567","mode":"sbc\|loopback"}`) |
+| `/ws` | WebSocket | Interactive AI agent — PCM audio in, TTS audio + events out |
+| `/siprec` | WebSocket | Co-pilot — `?role=caller\|agent&call_id=xxx` |
+| `/siprec/events` | SSE | Agent dashboard — `?call_id=xxx`, streams transcript/suggestion/summary |
+| `/call` | POST | Originate outbound call via ESL |
 
 ### REST API
 
 | Endpoint | Methods | Description |
 |----------|---------|-------------|
-| `/api/agents` | GET, POST | List/create agents with expertise and status |
+| `/api/agents` | GET, POST | Agent management with expertise and status |
 | `/api/calls` | GET | Call history with transcript, summary, sentiment |
-| `/api/calls/active` | GET | Currently active interactive + copilot sessions |
-| `/api/documents` | GET, POST | Upload documents for RAG indexing |
-| `/api/documents/search` | POST | RAG query — `{"query":"...","top_k":3}` |
-| `/api/llm/configs` | GET, POST | Manage LLM model configurations |
-| `/api/llm/test` | POST | Test a model — `{"provider":"anthropic-vertex","model":"...","prompt":"..."}` |
-| `/api/stats` | GET | Dashboard stats (active calls, sentiment breakdown) |
-| `/healthz` | GET | Health check with session count |
+| `/api/calls/active` | GET | Currently active sessions |
+| `/api/documents` | GET, POST | Document upload and RAG indexing |
+| `/api/documents/search` | POST | RAG vector query |
+| `/api/llm/configs` | GET, POST | LLM model configurations |
+| `/api/llm/test` | POST | Test a model with sample prompt |
+| `/api/blocklist` | GET, POST, DELETE | Robocall blocklist management |
+| `/api/robocall/stats` | GET | Robocall detection metrics |
+| `/api/robocall/test` | POST | Test robocall classification |
+| `/api/stats` | GET | Dashboard stats |
+| `/healthz` | GET | Health check |
 
 ### SSE Event Types (`/siprec/events`)
 
 ```json
 {"type":"transcript","speaker":"customer","text":"I need help with my claim"}
 {"type":"suggestion","suggestion":"Policy 4.2.1 covers this...","category":"answer","confidence":0.95}
+{"type":"robocall","text":"score=80% keywords=[press 1, auto warranty]"}
 {"type":"summary","summary":"Customer called about...","action_items":[...],"sentiment":"neutral"}
 ```
 
@@ -248,23 +291,16 @@ curl -X POST http://localhost:8080/api/documents \
   -H 'Content-Type: application/json' \
   -d '{"name":"Returns Policy","category":"policy","content":"Returns accepted within 30 days..."}'
 
-# Search the knowledge base
+# Search
 curl -X POST http://localhost:8080/api/documents/search \
   -d '{"query":"how long to return electronics","top_k":3}'
-
-# Response:
-[{"text":"Returns accepted within 30 days...","doc_name":"Returns Policy","score":0.95}]
 ```
 
-When a customer asks a question during a co-pilot call, the system automatically:
-1. Queries ChromaDB with the customer's utterance
-2. Retrieves the top 3 matching document chunks
-3. Injects them as context into Claude's system prompt
-4. Claude generates suggestions grounded in actual policy documents
+When a customer asks a question during a co-pilot call, the system automatically queries ChromaDB, retrieves matching document chunks, injects them as context into Claude's system prompt, and generates suggestions grounded in actual policy documents.
 
 ## Multi-LLM Support
 
-Both Claude and Gemini on Vertex AI are supported. Configure and test via the API or UI Settings page.
+Both Claude and Gemini on Vertex AI are supported with a unified `LLMClient` interface.
 
 ```bash
 # Test Claude
@@ -286,20 +322,7 @@ export CRM_WEBHOOK_TOKEN=Bearer_xxx
 docker compose -f docker-compose.sip.yml up -d
 ```
 
-Webhook payload:
-
-```json
-{
-  "conversation_id": "uuid",
-  "duration_seconds": 180,
-  "transcript": [{"speaker":"customer","text":"...","timestamp":"..."}],
-  "summary": "Customer called about billing dispute...",
-  "action_items": ["Issue refund", "Send confirmation email"],
-  "commitments_made": ["Callback within 24 hours"],
-  "sentiment": "negative",
-  "suggestions_given": [{"suggestion":"...","category":"empathy"}]
-}
-```
+Payload includes conversation ID, duration, full transcript, summary, action items, commitments made, sentiment analysis, and suggestions given during the call.
 
 ## Project Structure
 
@@ -307,58 +330,44 @@ Webhook payload:
 voiceagent/
 ├── gateway/
 │   ├── main.go             # Media gateway, WebSocket, VAD, ESL, interactive pipeline
-│   ├── siprec.go           # Co-pilot session, dual-leg STT, coach worker, summary, webhook
+│   ├── siprec.go           # Co-pilot: dual-leg STT, coach worker, summary, webhook
+│   ├── robocall.go         # 3-layer robocall detection: blocklist, audio, keywords
 │   ├── llm.go              # Multi-LLM abstraction (Claude + Gemini on Vertex AI)
-│   ├── api.go              # REST API (agents, calls, documents, stats, LLM config)
-│   ├── rag.go              # ChromaDB integration, document chunking, RAG query
+│   ├── api.go              # REST API: agents, calls, documents, stats, LLM config
+│   ├── rag.go              # ChromaDB: document chunking, vector storage, RAG query
 │   ├── go.mod / go.sum
 │   └── Dockerfile
 ├── freeswitch/
 │   ├── Dockerfile
 │   ├── entrypoint.sh
 │   └── config/
-│       ├── dialplan/
-│       │   ├── public.xml          # Inbound routing (1xxx=AI, 2xxx=copilot)
-│       │   ├── public-local.xml    # Docker Compose variant
-│       │   └── outbound.xml        # SBC trunk routing
-│       ├── sip_profiles/
-│       │   ├── external.xml        # SBC trunk profile
-│       │   └── external-local.xml  # Docker Compose variant
-│       └── autoload_configs/
-│           ├── acl.conf.xml        # IP ACL for SBC peers
-│           ├── modules.conf.xml    # mod_audio_fork, mod_sofia, mod_event_socket
-│           ├── sofia.conf.xml
-│           ├── switch.conf.xml
-│           └── event_socket.conf.xml
+│       ├── dialplan/           # public.xml (1xxx=AI, 2xxx=copilot), outbound.xml
+│       ├── sip_profiles/       # SBC trunk profile with gateway
+│       └── autoload_configs/   # mod_audio_fork, sofia, ACL, ESL
 ├── whisper/
 │   └── Dockerfile
 ├── ui/
 │   ├── src/app/
-│   │   ├── page.tsx                # Command Center dashboard
-│   │   ├── agents/page.tsx         # Agent management
-│   │   ├── calls/page.tsx          # Call history
-│   │   ├── calls/live/page.tsx     # Live Ops with SSE co-pilot
-│   │   ├── documents/page.tsx      # Knowledge base + RAG
-│   │   └── settings/page.tsx       # LLM config, prompts, SBC
-│   ├── src/components/
-│   │   └── layout/Sidebar.tsx      # Navigation sidebar
-│   ├── src/lib/
-│   │   ├── types.ts                # Shared TypeScript types
-│   │   ├── gateway.ts              # Gateway API client
-│   │   └── db.ts                   # Database client
-│   ├── prisma/schema.prisma        # PostgreSQL schema
+│   │   ├── page.tsx            # Command Center dashboard
+│   │   ├── agents/page.tsx     # Agent management
+│   │   ├── calls/page.tsx      # Call history with robocall badges
+│   │   ├── calls/live/page.tsx # Live Ops with SSE co-pilot
+│   │   ├── documents/page.tsx  # Knowledge base + RAG search
+│   │   └── settings/page.tsx   # LLM config, prompts, SBC, blocklist
+│   ├── src/components/         # Sidebar, dashboard cards, transcript viewer
+│   ├── src/lib/                # TypeScript types, gateway client, DB client
+│   ├── prisma/schema.prisma    # PostgreSQL schema
 │   ├── Dockerfile
 │   └── package.json
 ├── test/
-│   ├── simcall.go                  # Synthetic pipeline test
-│   ├── livecall.go                 # Real mic/speaker voice call
-│   ├── simcopilot.go               # Two-party co-pilot simulation
-│   ├── callcenter-live.sh          # Full call center demo with mic
-│   ├── test-sip-call.sh            # SIP call via baresip
-│   ├── test-sbc.sh                 # SBC integration tests
-│   └── sipp/inbound_call.xml       # sipp UAC scenario
-├── k8s/base/                       # Kustomize manifests for KinD deployment
-├── docker-compose.sip.yml          # Full platform (7 services)
+│   ├── simcall.go              # Synthetic pipeline test
+│   ├── livecall.go             # Real mic/speaker voice call
+│   ├── simcopilot.go           # Two-party co-pilot simulation
+│   ├── callcenter-live.sh      # Full call center demo with mic
+│   ├── test-sip-call.sh        # SIP call via baresip
+│   └── test-sbc.sh             # SBC integration tests
+├── k8s/base/                   # Kustomize manifests for KinD deployment
+├── docker-compose.sip.yml      # Full platform (7 services)
 ├── kind-config.yaml
 ├── Makefile
 └── README.md
@@ -371,31 +380,23 @@ voiceagent/
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LISTEN_ADDR` | `:8080` | Gateway listen address |
-| `STT_URL` | `http://whisper:8000/v1/audio/transcriptions` | Whisper API endpoint |
+| `STT_URL` | `http://whisper:8000/v1/audio/transcriptions` | Whisper STT endpoint |
 | `TTS_URL` | `http://piper:5000` | Piper TTS endpoint |
 | `GCP_PROJECT_ID` | from `ANTHROPIC_VERTEX_PROJECT_ID` | GCP project for Vertex AI |
 | `GCP_REGION` | from `CLOUD_ML_REGION` or `us-east5` | Vertex AI region |
 | `CLAUDE_MODEL` | `claude-3-5-haiku@20241022` | Default Claude model |
-| `SYSTEM_PROMPT` | *(conversational voice assistant)* | Interactive mode system prompt |
+| `SYSTEM_PROMPT` | *(conversational assistant)* | Interactive mode system prompt |
 | `ESL_HOST` | `freeswitch` | FreeSWITCH ESL host |
 | `ESL_PORT` | `8022` | FreeSWITCH ESL port |
 | `TTS_AUDIO_DIR` | *(empty)* | Shared volume for ESL WAV playback |
 | `DATABASE_URL` | *(empty)* | PostgreSQL connection string |
 | `CHROMA_URL` | *(empty)* | ChromaDB endpoint for RAG |
-| `CRM_WEBHOOK_URL` | *(empty)* | POST call summaries here on hangup |
+| `CRM_WEBHOOK_URL` | *(empty)* | POST call summaries on hangup |
 | `CRM_WEBHOOK_TOKEN` | *(empty)* | Bearer token for webhook auth |
 
 ### TTS Voice
 
-Default: `en_US-ryan-high` (Piper). Change via `MODEL_DOWNLOAD_LINK` in docker-compose:
-
-```yaml
-piper:
-  environment:
-    - MODEL_DOWNLOAD_LINK=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/ryan/high/en_US-ryan-high.onnx?download=true
-```
-
-Available voices at [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
+Default: `en_US-ryan-high` (Piper). Available voices at [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices).
 
 ## Pipeline Internals
 
@@ -403,63 +404,72 @@ Available voices at [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-
 
 ```
 readFromFS ──pcmIn──▶ sttPipeline ──transcripts──▶ claudeWorker ──sentences──▶ ttsWorker ──pcmOut──▶ writeToFS
-                      (VAD + Whisper)               (streaming SSE)             (Piper HTTP)          (ESL broadcast)
+                      (VAD+Whisper)  + robocall L3  (streaming SSE)             (Piper HTTP)          (ESL broadcast)
 ```
 
 ### Co-Pilot Mode (5 goroutines)
 
 ```
 readCaller ──pcmCaller──▶ callerSTT ──┐
-                                      ├──transcripts──▶ coachWorker ──▶ SSE broadcast
-readAgent  ──pcmAgent───▶ agentSTT  ──┘                (RAG + Claude)   → agent dashboard
-                                                                        → post-call summary
-                                                                        → CRM webhook
+                                      ├──transcripts──▶ coachWorker ──▶ SSE → agent dashboard
+readAgent  ──pcmAgent───▶ agentSTT  ──┘  + robocall L3  (RAG+Claude)   → post-call summary → CRM
+```
+
+### Robocall Detection Pipeline
+
+```
+Inbound call
+    │
+    ├── Layer 1: Blocklist hash map (< 1ms)
+    │   MATCH → log + reject
+    │
+    ├── Layer 2: Audio pattern (first 2s)
+    │   RMS variance, silence ratio, monotone detection
+    │   score > 0.8 → flag as likely robocall
+    │
+    └── Layer 3: Transcript keywords (after Whisper)
+        28 weighted phrases, combined scoring
+        score > threshold → flag + optional auto-block
 ```
 
 ### Latency Profile
 
 | Stage | Duration |
 |-------|----------|
+| Blocklist check | < 1ms |
 | VAD silence detection | 500ms |
-| Whisper transcription (base.en) | 200-400ms |
+| Whisper transcription | 200-400ms |
+| Robocall keyword check | < 1ms |
 | RAG query (ChromaDB) | 50-100ms |
 | Claude/Gemini response | 1-2s |
 | Piper TTS synthesis | 200-400ms |
 | **Co-pilot (speech → suggestion)** | **~2s** |
-| **Interactive (speech → voice response)** | **~3s** |
+| **Interactive (speech → voice)** | **~3s** |
 
 ## Observability
 
 ```bash
-# Docker Compose logs
 docker compose -f docker-compose.sip.yml logs -f gateway
 docker compose -f docker-compose.sip.yml logs -f freeswitch
 docker compose -f docker-compose.sip.yml logs -f whisper
-
-# KinD logs
-make logs-gw
-make logs-fs
-make status
 ```
 
 ## Cleanup
 
 ```bash
-# Docker Compose
 docker compose -f docker-compose.sip.yml down -v
-
-# KinD
-make clean
 ```
 
 ## Future Work
 
-- **Streaming STT** — Replace batch Whisper with WebSocket streaming for sub-second transcription
+- **Streaming STT** — WebSocket streaming Whisper for sub-second transcription
 - **Barge-in** — Cancel in-flight TTS when customer interrupts
-- **Neural VAD** — Replace energy-based VAD with Silero for better accuracy
-- **Knowledge Base RAG with Vertex AI Embeddings** — Replace n-gram hashing with `text-embedding-004`
-- **Agent Desktop UI** — Full React dashboard with WebRTC softphone built-in
-- **Call Recording** — Store audio files with playback in call detail view
-- **Horizontal Scaling** — Multiple gateway replicas with Redis session affinity
-- **Metrics** — Prometheus endpoints for call volume, latency percentiles, pipeline health
-- **Multi-language** — Configure STT/TTS language per call via SIP headers
+- **Neural VAD** — Silero VAD for better speech boundary detection
+- **Vertex AI Embeddings** — Replace n-gram hashing with `text-embedding-004` for RAG
+- **ML Robocall Model** — Train a classifier on audio features for higher accuracy
+- **STIR/SHAKEN** — Integrate SIP attestation headers for caller verification
+- **Agent Desktop UI** — WebRTC softphone built into the dashboard
+- **Call Recording** — Audio storage with playback in call detail view
+- **Horizontal Scaling** — Redis session affinity for multi-replica gateway
+- **Prometheus Metrics** — Call volume, latency percentiles, robocall detection rate
+- **Multi-language** — STT/TTS language selection per call via SIP headers
