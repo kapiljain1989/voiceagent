@@ -120,6 +120,7 @@ type gateway struct {
 	api       *APIHandler
 	robocall  *RobocallDetector
 	actions   *ActionExecutor
+	security  *SecurityHandler
 }
 
 // -------------------------------------------------------------------
@@ -196,6 +197,9 @@ func main() {
 
 	gw.actions = NewActionExecutor(gw)
 	gw.actions.RegisterRoutes(mux)
+
+	gw.security = NewSecurityHandler(api.db)
+	gw.security.RegisterRoutes(mux)
 
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
@@ -456,6 +460,16 @@ func (s *session) transcribeAndSend(ctx context.Context, pcm []byte) {
 	if isWhisperHallucination(text) {
 		s.log.Debug("filtered hallucination", "text", text)
 		return
+	}
+
+	// PII masking — redact credit cards, SSNs, etc. before logging or sending to LLM
+	if s.gw.security != nil {
+		masked, detections := s.gw.security.masker.MaskTranscript(text)
+		if len(detections) > 0 {
+			s.log.Warn("pii detected and masked", "detections", len(detections), "types", piiTypes(detections))
+			s.sendEvent("pii_masked", fmt.Sprintf("Detected %d PII items: %s", len(detections), piiTypes(detections)))
+			text = masked
+		}
 	}
 
 	s.log.Info("heard", "text", text)
@@ -837,6 +851,14 @@ func (s *session) playViaWebSocket(ctx context.Context, pcm []byte) {
 // -------------------------------------------------------------------
 // Audio utilities
 // -------------------------------------------------------------------
+
+func piiTypes(detections []PIIDetection) string {
+	types := make([]string, len(detections))
+	for i, d := range detections {
+		types[i] = d.Type
+	}
+	return strings.Join(types, ", ")
+}
 
 // isWhisperHallucination detects common Whisper false positives from silence/noise.
 // Only filters exact hallucination patterns — real phrases like "Thank you very much" pass through.
