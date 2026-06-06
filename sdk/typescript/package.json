@@ -1,0 +1,16 @@
+{
+  "name": "@voiceagent/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the VoiceAgent Telecom-Native AI Gateway",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "files": ["dist"],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
