@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# On-premises deployment overlay
+# Deploys into a restricted enterprise data center with:
+# - No internet access for STT/TTS (local models only)
+# - Private SIP trunk to Cisco CUBE / AudioCodes SBC
+# - Internal-only container registry
+# - Persistent storage for call recordings
+
+namespace: voiceagent
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: Deployment
+      name: media-gateway
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DEPLOYMENT_MODE
+          value: "on-prem"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: ENABLE_AIRGAP
+          value: "false"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: SBC_PROFILE
+          value: "cisco-cube"
+  - target:
+      kind: Deployment
+      name: freeswitch
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "1Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2"

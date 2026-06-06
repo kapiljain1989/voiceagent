@@ -1,0 +1,34 @@
+<!-- AudioCodes Mediant SBC trunk profile -->
+<profile name="audiocodes">
+  <gateways>
+    <gateway name="audiocodes-sbc">
+      <param name="proxy" value="$${sbc_address}"/>
+      <param name="register" value="$${sbc_register}"/>
+      <param name="username" value="$${sbc_username}"/>
+      <param name="password" value="$${sbc_password}"/>
+      <param name="caller-id-in-from" value="true"/>
+      <param name="ping" value="30"/>
+      <param name="retry-seconds" value="15"/>
+    </gateway>
+  </gateways>
+  <settings>
+    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="sip-port" value="5060"/>
+    <param name="ext-sip-ip" value="$${ext_ip}"/>
+    <param name="rtp-ip" value="$${local_ip_v4}"/>
+    <param name="ext-rtp-ip" value="$${ext_ip}"/>
+    <param name="context" value="public"/>
+    <param name="dialplan" value="XML"/>
+    <param name="auth-calls" value="$${sbc_auth_calls}"/>
+    <!-- AudioCodes preferred codecs -->
+    <param name="inbound-codec-prefs" value="PCMU,PCMA,G722,G729"/>
+    <param name="outbound-codec-prefs" value="PCMU,PCMA,G722"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+    <param name="aggressive-nat-detection" value="true"/>
+    <param name="NDLB-force-rport" value="safe"/>
+    <param name="enable-timer" value="true"/>
+    <param name="session-timeout" value="1800"/>
+    <param name="rfc2833-pt" value="101"/>
+    <param name="dtmf-type" value="rfc2833"/>
+  </settings>
+</profile>

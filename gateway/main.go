@@ -201,6 +201,11 @@ func main() {
 	gw.security = NewSecurityHandler(api.db)
 	gw.security.RegisterRoutes(mux)
 
+	failover := NewFailoverManager(gw)
+	mux.HandleFunc("/api/failover/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, failover.Status())
+	})
+
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
 	mux.HandleFunc("/siprec", gw.handleSIPREC)
@@ -215,6 +220,8 @@ func main() {
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	failover.StartHealthMonitor(sigCtx)
 
 	go func() {
 		slog.Info("gateway listening", "addr", cfg.ListenAddr, "stt", cfg.STTURL, "tts", cfg.TTSURL)
