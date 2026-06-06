@@ -114,10 +114,11 @@ type claudeMessage struct {
 // -------------------------------------------------------------------
 
 type gateway struct {
-	cfg      *Config
-	gcpCreds *google.Credentials
-	sessions atomic.Int64
-	api      *APIHandler
+	cfg       *Config
+	gcpCreds  *google.Credentials
+	sessions  atomic.Int64
+	api       *APIHandler
+	robocall  *RobocallDetector
 }
 
 // -------------------------------------------------------------------
@@ -188,6 +189,9 @@ func main() {
 	api := NewAPIHandler(gw)
 	gw.api = api
 	api.RegisterRoutes(mux)
+
+	gw.robocall = NewRobocallDetector(api.db)
+	gw.robocall.RegisterRoutes(mux)
 
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
@@ -451,6 +455,16 @@ func (s *session) transcribeAndSend(ctx context.Context, pcm []byte) {
 	}
 
 	s.log.Info("heard", "text", text)
+
+	// Layer 3 robocall detection — keyword check on transcript
+	if s.gw.robocall != nil {
+		kwResult := s.gw.robocall.ClassifyTranscript(text)
+		if kwResult.Score > 0.3 {
+			s.log.Warn("robocall keywords detected", "score", kwResult.Score, "keywords", kwResult.Keywords)
+			s.sendEvent("robocall", fmt.Sprintf("score=%.0f%% keywords=%v", kwResult.Score*100, kwResult.Keywords))
+		}
+	}
+
 	s.sendEvent("transcript", text)
 	select {
 	case s.transcripts <- text:
