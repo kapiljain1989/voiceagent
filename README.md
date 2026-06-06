@@ -343,7 +343,8 @@ voiceagent/
 │   ├── base/               # Kustomize base manifests
 │   └── overlays/           # on-prem, private-vpc, air-gapped
 ├── docs/
-│   ├── api-reference.md    # Complete API documentation
+│   ├── features.md         # Complete feature reference (19 features, 857 lines)
+│   ├── api-reference.md    # Full API documentation (25+ endpoints)
 │   ├── quick-setup.md      # 5-minute setup guide
 │   └── blog.md             # Technical deep-dive blog
 ├── test/                   # livecall, simcall, simcopilot, callcenter-live
@@ -380,9 +381,12 @@ voiceagent/
 
 | Document | Description |
 |----------|-------------|
-| [`docs/quick-setup.md`](docs/quick-setup.md) | 5-minute setup guide with prerequisites |
-| [`docs/api-reference.md`](docs/api-reference.md) | Complete API documentation (25+ endpoints) |
-| [`docs/blog.md`](docs/blog.md) | Technical deep-dive: architecture, protocol handling, enterprise positioning |
+| [`docs/features.md`](docs/features.md) | Complete feature reference — all 19 features with source code, schemas, and pipeline details (857 lines) |
+| [`docs/api-reference.md`](docs/api-reference.md) | Full API documentation — 25+ endpoints with request/response examples |
+| [`docs/quick-setup.md`](docs/quick-setup.md) | 5-minute setup guide — prerequisites, deployment, testing, troubleshooting |
+| [`docs/blog.md`](docs/blog.md) | Technical deep-dive — architecture, protocol handling, enterprise positioning |
+| [`sdk/python/README.md`](sdk/python/README.md) | Python SDK usage guide |
+| [`sdk/typescript/README.md`](sdk/typescript/README.md) | TypeScript SDK usage guide with Next.js examples |
 
 ---
 
