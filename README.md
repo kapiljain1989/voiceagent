@@ -85,6 +85,54 @@ Customer ↔ Human Agent (live SIP call)
   → UI live transcript              → POST webhook → CRM
 ```
 
+### Smart Self-Service Actions
+
+When the customer makes an actionable request through natural speech, the LLM parses the intent, the gateway executes a backend API call, and the AI confirms the action via voice.
+
+```
+Customer: "Hey, I need to reschedule my delivery for Thursday at 3 PM"
+    │
+    ▼
+Claude parses intent → {"type":"api_call","intent":"reschedule","api_call":{"endpoint":"/deliveries","method":"PUT","payload":{"date":"2026-06-12","time":"15:00"}}}
+    │
+    ▼
+Gateway executes API call to CRM/backend
+    │
+    ▼
+AI speaks: "I've rescheduled your delivery to Thursday at 3 PM. Is there anything else?"
+```
+
+Supported action types:
+- **api_call** — reschedule, cancel, check status, update info → calls configured CRM webhook
+- **transfer** — escalation to human agent with full context (see below)
+- **speak** — normal conversation (default)
+
+### Intelligent Call Transfer with Context
+
+When the AI detects anger, complexity, or an explicit request for a human, it transfers the call via SIP with custom headers containing the full conversation context.
+
+```
+Customer: "This is ridiculous! I've been overcharged $142 for three months! Let me speak to a manager!"
+    │
+    ▼
+Claude detects: anger + billing dispute + escalation request
+    │
+    ▼
+AI speaks: "I understand this is frustrating. Let me connect you with a billing specialist."
+    │
+    ▼
+Gateway sends ESL transfer with custom SIP headers:
+    X-Transfer-Summary: "Customer upset about $142 billing error over 3 months. Wants refund."
+    X-Transfer-Reason: angry
+    X-Transfer-Department: retention
+    X-Transfer-Priority: urgent
+    X-Transfer-Transcript: "[user] overcharged $142 | [assistant] checking account..."
+    │
+    ▼
+Human agent's Cisco/Avaya softphone displays the summary instantly.
+No more "Please repeat your story."
+```
+
 ### Mode 3: Robocall Detection
 
 Three-layer spam filtering runs on every inbound call before it reaches the agent or AI pipeline.
@@ -247,6 +295,8 @@ cd test && ./simcopilot localhost:8080  # Co-pilot simulation
 | `/api/blocklist` | GET, POST, DELETE | Robocall blocklist management |
 | `/api/robocall/stats` | GET | Robocall detection metrics |
 | `/api/robocall/test` | POST | Test robocall classification |
+| `/api/actions/test` | POST | Parse action from text |
+| `/api/actions/webhooks` | GET, POST | Manage self-service action webhook URLs |
 | `/api/stats` | GET | Dashboard stats |
 | `/healthz` | GET | Health check |
 
@@ -332,6 +382,7 @@ voiceagent/
 │   ├── main.go             # Media gateway, WebSocket, VAD, ESL, interactive pipeline
 │   ├── siprec.go           # Co-pilot: dual-leg STT, coach worker, summary, webhook
 │   ├── robocall.go         # 3-layer robocall detection: blocklist, audio, keywords
+│   ├── actions.go          # Self-service actions + intelligent call transfer with SIP headers
 │   ├── llm.go              # Multi-LLM abstraction (Claude + Gemini on Vertex AI)
 │   ├── api.go              # REST API: agents, calls, documents, stats, LLM config
 │   ├── rag.go              # ChromaDB: document chunking, vector storage, RAG query

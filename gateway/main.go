@@ -119,6 +119,7 @@ type gateway struct {
 	sessions  atomic.Int64
 	api       *APIHandler
 	robocall  *RobocallDetector
+	actions   *ActionExecutor
 }
 
 // -------------------------------------------------------------------
@@ -192,6 +193,9 @@ func main() {
 
 	gw.robocall = NewRobocallDetector(api.db)
 	gw.robocall.RegisterRoutes(mux)
+
+	gw.actions = NewActionExecutor(gw)
+	gw.actions.RegisterRoutes(mux)
 
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
@@ -543,11 +547,20 @@ func (s *session) claudeWorker(ctx context.Context) {
 				continue
 			}
 
-			s.log.Info("replied", "text", full)
-			s.sendEvent("response", full)
+			// Check if the response is a structured action (self-service or transfer)
+			action := ParseAction(full)
+			spokenText := full
+
+			if action.Type == "api_call" || action.Type == "transfer" {
+				s.log.Info("action detected", "type", action.Type, "intent", action.Intent, "confidence", action.Confidence)
+				spokenText = s.gw.actions.ExecuteAction(ctx, s, action)
+			}
+
+			s.log.Info("replied", "text", spokenText, "action", action.Type)
+			s.sendEvent("response", spokenText)
 
 			s.histMu.Lock()
-			s.history = append(s.history, claudeMessage{Role: "assistant", Content: full})
+			s.history = append(s.history, claudeMessage{Role: "assistant", Content: spokenText})
 			s.histMu.Unlock()
 		}
 	}
@@ -559,10 +572,15 @@ func (s *session) streamClaude(ctx context.Context, messages []claudeMessage) (s
 		s.gw.cfg.GCPRegion, s.gw.cfg.GCPProjectID, s.gw.cfg.GCPRegion, s.gw.cfg.ClaudeModel,
 	)
 
+	systemPrompt := s.gw.cfg.SystemPrompt
+	if s.gw.actions != nil {
+		systemPrompt = actionSystemPrompt
+	}
+
 	body, _ := json.Marshal(map[string]any{
 		"anthropic_version": "vertex-2023-10-16",
 		"max_tokens":        512,
-		"system":            s.gw.cfg.SystemPrompt,
+		"system":            systemPrompt,
 		"messages":          messages,
 		"stream":            true,
 	})
