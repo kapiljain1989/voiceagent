@@ -114,13 +114,19 @@ type claudeMessage struct {
 // -------------------------------------------------------------------
 
 type gateway struct {
-	cfg       *Config
-	gcpCreds  *google.Credentials
-	sessions  atomic.Int64
-	api       *APIHandler
-	robocall  *RobocallDetector
-	actions   *ActionExecutor
-	security  *SecurityHandler
+	cfg        *Config
+	gcpCreds   *google.Credentials
+	sessions   atomic.Int64
+	api        *APIHandler
+	robocall   *RobocallDetector
+	actions    *ActionExecutor
+	security   *SecurityHandler
+	store      SessionStore
+	metrics    *Metrics
+	sttPool    *WorkerPool
+	ttsPool    *WorkerPool
+	rateLimiter *RateLimiter
+	admission  *AdmissionController
 }
 
 // -------------------------------------------------------------------
@@ -185,7 +191,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	gw := &gateway{cfg: &cfg, gcpCreds: gcpCreds}
+	gw := &gateway{
+		cfg:         &cfg,
+		gcpCreds:    gcpCreds,
+		store:       NewSessionStore(envOr("REDIS_URL", "")),
+		metrics:     NewMetrics(),
+		sttPool:     NewWorkerPool("stt", parseWorkerURLs(cfg.STTURL)),
+		ttsPool:     NewWorkerPool("tts", parseWorkerURLs(cfg.TTSURL)),
+		rateLimiter: NewRateLimiter(100, 200), // 100 req/s per IP, burst 200
+		admission:   NewAdmissionController(500), // max 500 concurrent sessions
+	}
 
 	mux := http.NewServeMux()
 	api := NewAPIHandler(gw)
@@ -207,6 +222,15 @@ func main() {
 	})
 
 	handleDTMFRoutes(mux)
+
+	mux.HandleFunc("/metrics", gw.metrics.Handler())
+	mux.HandleFunc("/api/scale/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"stt_pool":  gw.sttPool.Status(),
+			"tts_pool":  gw.ttsPool.Status(),
+			"admission": gw.admission.Status(),
+		})
+	})
 
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
@@ -860,6 +884,21 @@ func (s *session) playViaWebSocket(ctx context.Context, pcm []byte) {
 // -------------------------------------------------------------------
 // Audio utilities
 // -------------------------------------------------------------------
+
+// parseWorkerURLs splits comma-separated URLs into a pool list.
+// Single URL: "http://whisper:8000" → ["http://whisper:8000"]
+// Multiple:  "http://whisper-1:8000,http://whisper-2:8000" → pool of 2
+func parseWorkerURLs(urls string) []string {
+	parts := strings.Split(urls, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
 
 func piiTypes(detections []PIIDetection) string {
 	types := make([]string, len(detections))
