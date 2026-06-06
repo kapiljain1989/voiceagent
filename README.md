@@ -1,6 +1,8 @@
-# AI Media Gateway — Enterprise Call Center Platform
+# The Telecom-Native AI Gateway
 
-An enterprise-grade, AI-powered call center platform with telecom-grade reliability. Handles inbound/outbound SIP voice calls, provides real-time agent coaching with RAG-powered knowledge retrieval, detects robocalls, executes self-service actions via natural language, performs intelligent call transfers with context, masks PII for PCI/HIPAA compliance, runs voice biometric fraud detection, and generates automated post-call summaries. Deployable on-premises, in private VPCs, or fully air-gapped with zero internet dependency.
+B2BUA media proxy for enterprise SBCs with built-in RFC 2833 DTMF handling, local G.711 audio leveling, stateful SIP failover protection, PCI/HIPAA-compliant PII masking, and voice biometric fraud detection.
+
+An enterprise-grade, NOC-ready AI call center platform. Handles inbound/outbound SIP calls, provides real-time agent coaching with RAG, detects robocalls, executes self-service actions, performs intelligent call transfers with context headers, and generates automated post-call summaries. Deployable on-premises, in private VPCs, or fully air-gapped.
 
 Built with Go, Next.js, FreeSWITCH, Whisper STT, Piper TTS, Claude/Gemini on Vertex AI, PostgreSQL, and ChromaDB.
 
@@ -210,6 +212,51 @@ All services → SIP REFER to human queue with X-Failover headers
 
 Real-time status: `GET /api/failover/status`
 
+## NOC-Grade Infrastructure
+
+### Native DTMF Parsing (RFC 2833/4733)
+
+When ASR fails in noisy environments, callers resort to keypad input. The gateway intercepts DTMF digits directly from RFC 2833 RTP event packets — 100% accurate, no audio processing.
+
+```
+Caller presses: 4-8-2-9-1-0 on phone keypad
+    │
+    ▼
+Gateway intercepts RFC 2833 RTP payload (4 bytes per event)
+    │
+    ▼
+LLM receives: "User typed: 482910"
+```
+
+- Parses event code, end-bit, and duration from the raw packet
+- Inter-digit timeout with automatic sequence flushing
+- Inband DTMF detection fallback via Goertzel algorithm (for legacy PBX without RFC 2833)
+- Captures PINs, account numbers, dates without exposing audio to cloud
+
+### Dynamic Audio Ingress Leveling (Telecom AGC)
+
+Standard web VAD assumes clean microphone input. Telephony audio arrives compressed, degraded, with line static and echo. The telecom audio pipeline processes every frame before STT:
+
+| Stage | Function | Purpose |
+|-------|----------|---------|
+| **AGC** | Automatic Gain Control | Normalizes volume — boosts quiet, tames loud |
+| **Noise Gate** | Background suppression | Kills static, hum, office noise below threshold |
+| **CNG** | Comfort Noise Generation | Replaces harsh silence with natural-sounding hiss |
+
+Smooth gain transitions with configurable attack/release rates prevent clipping. Soft clipping at ±32000 prevents harsh distortion on loud inputs.
+
+### SIP B2BUA Survival State
+
+The gateway acts as a full Back-to-Back User Agent — it controls both sides of the call session. If any backend service fails:
+
+| Situation | Standard AI Bot | This Gateway |
+|-----------|----------------|-------------|
+| Cloud AI API drops | Call goes silent, drops after 10s | Plays hold audio, sends SIP REFER, saves the call |
+| User enters credit card | Captures audio, exposes to cloud logs | Intercepts, masks PII, replaces with silence |
+| Heavy background static | AI constantly interrupts | Telecom AGC + noise gate enables natural turn-taking |
+| DTMF input needed | Tries to "listen" to tone via ASR | Intercepts RFC 2833 packets — 100% accurate |
+| Internet connection lost | Complete failure | Local emergency dialplan + SIP REFER to human queue |
+
 ## Services (7 containers)
 
 | Service | Image | Port | Role |
@@ -357,6 +404,7 @@ cd test && ./simcopilot localhost:8080           # Co-pilot simulation
 | `/api/actions/webhooks` | Self-service action webhook URLs |
 | `/api/actions/test` | Test action parsing |
 | `/api/failover/status` | Circuit breaker health (all services) |
+| `/api/dtmf/test` | Test DTMF digit parsing |
 | `/api/stats` | Dashboard stats |
 | `/healthz` | Health check |
 
@@ -435,6 +483,8 @@ voiceagent/
 │   ├── actions.go          # Self-service actions + intelligent call transfer
 │   ├── failover.go         # Circuit breakers + deterministic failover state machine
 │   ├── codec.go            # G.711 μ-law/A-law transcoding with lookup tables
+│   ├── dtmf.go             # RFC 2833/4733 DTMF parsing + Goertzel inband detection
+│   ├── agc.go              # Automatic Gain Control + noise gate + comfort noise
 │   ├── llm.go              # Multi-LLM abstraction (Claude + Gemini on Vertex AI)
 │   ├── api.go              # REST API (agents, calls, documents, stats, LLM config)
 │   ├── rag.go              # ChromaDB document chunking + RAG query
@@ -565,6 +615,9 @@ All circuits open    → SIP REFER to human queue (ext 3000)
 | G.711 codec transcoding | | Yes |
 | Failover state machine | | Yes |
 | Cisco CUBE / AudioCodes profiles | | Yes |
+| RFC 2833 DTMF parsing | | Yes |
+| Telecom AGC + noise gate | | Yes |
+| B2BUA survival state | | Yes |
 | Air-gapped deployment | | Yes |
 
 ## Observability

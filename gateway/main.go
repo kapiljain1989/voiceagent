@@ -206,6 +206,8 @@ func main() {
 		writeJSON(w, http.StatusOK, failover.Status())
 	})
 
+	handleDTMFRoutes(mux)
+
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
 	mux.HandleFunc("/siprec", gw.handleSIPREC)
