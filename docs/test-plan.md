@@ -1,6 +1,6 @@
 # VoiceAgent — Comprehensive Test Plan
 
-Complete testing guide covering all 19 features, 25+ API endpoints, 10 services, 4 deployment overlays (local, cloud, on-prem, air-gapped), Istio service mesh, and Gateway API.
+Complete testing guide covering all 21 features, 27+ API endpoints, 8-11 services, standalone helper mode, 4 K8s overlays, Istio service mesh, voice sentiment, and SBC lab.
 
 ---
 
@@ -34,6 +34,9 @@ Complete testing guide covering all 19 features, 25+ API endpoints, 10 services,
 26. [Load & Stress Tests](#26-load--stress-tests)
 27. [Deployment Mode Tests](#27-deployment-mode-tests)
 28. [End-to-End Scenario Tests](#28-end-to-end-scenario-tests)
+29. [Voice Sentiment Tests](#29-voice-sentiment-tests)
+30. [Standalone Helper Mode Tests](#30-standalone-helper-mode-tests)
+31. [SBC Lab & Softphone Tests](#31-sbc-lab--softphone-tests)
 
 ---
 
@@ -1219,6 +1222,203 @@ wait
 3. Verify: all 3 calls completed successfully
 4. Check failover: all circuits still `closed`
 
+### Scenario F: Voice Sentiment in Co-Pilot
+
+1. Start co-pilot session (dial 2001 from mobile or run `simcopilot`)
+2. Speak calmly: "I'd like to check my account balance"
+3. Then speak with frustration: "This is the third time I've called about this!"
+4. Hang up
+5. Check summary: voice sentiment should show rising agitation/frustration
+6. Verify: `docker logs voiceagent-gateway-1 | grep "voice_sentiment\|agitation\|frustration"`
+
+### Scenario G: Standalone Helper with Real SBC
+
+1. Deploy standalone: `docker compose -f docker-compose.helper.yml up -d`
+2. Configure SBC SIPREC to point to VoiceAgent IP:5061
+3. Make a real call through SBC
+4. Verify: copilot session auto-discovered at `/api/copilot/active`
+5. Verify: transcript + suggestions in dashboard
+6. Verify: voice sentiment data in summary
+
+---
+
+## 29. Voice Sentiment Tests
+
+### Test 29.1: Sentiment API in Active Sessions
+
+```bash
+# During an active copilot call:
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/copilot/active | python3 -c "
+import sys,json
+sessions = json.load(sys.stdin)
+for s in sessions:
+    vs = s.get('voice_sentiment', {})
+    print(f'Call: {s[\"call_id\"][:12]}')
+    print(f'  Agitation:   {vs.get(\"agitation\", 0):.2f}')
+    print(f'  Frustration: {vs.get(\"frustration\", 0):.2f}')
+    print(f'  Engagement:  {vs.get(\"engagement\", 0):.2f}')
+    print(f'  Pitch:       {vs.get(\"avg_pitch_hz\", 0):.0f} Hz')
+    print(f'  Speed:       {vs.get(\"speaking_rate_wpm\", 0):.0f} wpm')
+"
+```
+
+**Expected:** Numeric values for all sentiment fields
+
+### Test 29.2: Voice Sentiment in Post-Call Summary
+
+```bash
+# After a co-pilot call ends, check gateway logs:
+docker logs voiceagent-gateway-1 --tail=20 2>&1 | grep -E "agitation|frustration|voice_sentiment"
+```
+
+**Expected:** Log entry with `agitation`, `frustration`, `avg_pitch`, `speaking_rate`, `final_sentiment`
+
+### Test 29.3: Multi-Modal Override
+
+```bash
+# If voice shows frustration > 0.6 but text says neutral,
+# final sentiment should override to negative.
+# Verify in summary logs:
+docker logs voiceagent-gateway-1 --tail=20 2>&1 | grep "text_sentiment.*voice_sentiment"
+```
+
+**Expected:** `text_sentiment=neutral`, `voice_sentiment=negative`, `final_sentiment=negative`
+
+---
+
+## 30. Standalone Helper Mode Tests
+
+### Test 30.1: Helper Mode Deploy
+
+```bash
+docker compose -f docker-compose.helper.yml up -d
+docker compose -f docker-compose.helper.yml ps --format "table {{.Name}}\t{{.Status}}"
+```
+
+**Expected:** 8 services running (no FreeSWITCH, no Piper)
+
+### Test 30.2: SIP Server Started
+
+```bash
+docker logs voiceagent-gateway-1 2>&1 | grep "SIP server"
+```
+
+**Expected:** `SIP server listening` with `addr=:5060`
+
+### Test 30.3: Config Mode
+
+```bash
+curl -s http://localhost:8080/api/config | python3 -m json.tool
+```
+
+**Expected:** `"mode": "standalone"`, `"sip_listen": ":5060"`
+
+### Test 30.4: Healthz Mode
+
+```bash
+curl -s http://localhost:8080/healthz
+```
+
+**Expected:** `{"status":"ok","sessions":0,"mode":"standalone"}`
+
+### Test 30.5: SIP OPTIONS
+
+```bash
+python3 -c "
+import socket, time
+msg='OPTIONS sip:test@127.0.0.1:5061 SIP/2.0\r\nVia: SIP/2.0/TCP 127.0.0.1:15060;branch=z9hG4bK-test\r\nMax-Forwards: 70\r\nFrom: <sip:test@127.0.0.1>;tag=t1\r\nTo: <sip:test@127.0.0.1>\r\nCall-ID: test-001\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n'
+s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(5); s.connect(('127.0.0.1', 5061))
+s.send(msg.encode()); time.sleep(1)
+print(s.recv(4096).decode().split('\r\n')[0]); s.close()
+"
+```
+
+**Expected:** `SIP/2.0 200 OK`
+
+### Test 30.6: All Features in Helper Mode
+
+```bash
+# Auth
+TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+# Robocall
+curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/api/robocall/test \
+  -d '{"text":"Press 1 for warranty"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['keyword']['category'])"
+
+# PII
+curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/api/security/pii/test \
+  -d '{"text":"SSN 123-45-6789 dob 16121968"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['pii_found'])"
+
+# DTMF
+curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/api/dtmf/test \
+  -d '{"text":"482910"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['parsed'])"
+
+# Failover
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/failover/status | python3 -c "import sys,json; d=json.load(sys.stdin); print('All closed' if all(v['state']=='closed' for v in d.values()) else 'ISSUE')"
+```
+
+**Expected:** `robocall`, `True`, `User typed: 482910`, `All closed`
+
+---
+
+## 31. SBC Lab & Softphone Tests
+
+### Test 31.1: SBC Lab Deploy
+
+```bash
+export EXT_IP=$(ipconfig getifaddr en0)
+make sbc-lab
+docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml ps | wc -l
+```
+
+**Expected:** 11 services running (10 + Kamailio)
+
+### Test 31.2: Kamailio SIP OPTIONS
+
+```bash
+make sbc-test test1
+```
+
+**Expected:** `Kamailio responded: SIP/2.0 200 OK`
+
+### Test 31.3: Softphone Registration
+
+```bash
+# Verify customer1 (mobile) registered:
+docker exec voiceagent-freeswitch-1 fs_cli -P 8022 -x "sofia status profile softphone reg" 2>/dev/null | grep "User:"
+```
+
+**Expected:** `customer1@192.168.x.x` registered
+
+### Test 31.4: AI Agent Call (dial 1000)
+
+1. From mobile softphone, dial `1000`
+2. Speak: "Hello, I need help with my insurance"
+3. Listen for Claude AI response via Piper TTS
+
+**Expected:** AI responds with clear speech, no JSON metadata, no feedback loop
+
+### Test 31.5: Co-Pilot Bridge (dial 2001)
+
+1. Register `agent1` via baresip on laptop
+2. Open `http://<LAN_IP>:3000/calls/live`
+3. From mobile, dial `2001`
+4. Baresip auto-answers
+5. Speak from mobile
+
+**Expected:** Active session appears in UI with caller/agent identity, transcript streams
+
+### Test 31.6: Full SBC Test Suite
+
+```bash
+make sbc-test
+```
+
+**Expected:** All tests pass (OPTIONS, REGISTER, INVITE, trunk API, health)
+
 ---
 
 ## Test Results Template
@@ -1272,4 +1472,19 @@ wait
 | 25.1-25.2 | SIP calls | | |
 | 26.1-26.4 | Load tests | | |
 | 27.1-27.4 | Deployment modes | | |
+| 29.1 | Sentiment in active sessions | | |
+| 29.2 | Sentiment in post-call summary | | |
+| 29.3 | Multi-modal override | | |
+| 30.1 | Helper mode deploy (8 services) | | |
+| 30.2 | SIP server started | | |
+| 30.3 | Config mode API | | |
+| 30.4 | Healthz mode field | | |
+| 30.5 | SIP OPTIONS | | |
+| 30.6 | All features in helper mode | | |
+| 31.1 | SBC lab deploy (11 services) | | |
+| 31.2 | Kamailio SIP OPTIONS | | |
+| 31.3 | Softphone registration | | |
+| 31.4 | AI agent call (1000) | | |
+| 31.5 | Co-pilot bridge (2001) | | |
+| 31.6 | Full SBC test suite | | |
 | 28.A-28.E | E2E scenarios | | |
