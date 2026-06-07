@@ -1,6 +1,8 @@
-# VoiceAgent: Telecom-Native AI Media & Signaling Gateway
+# VoiceAgent: Telecom-Native AI Call Center Platform
 
-An open-core, high-performance **Back-to-Back User Agent (B2BUA)** and media proxy written in Go. VoiceAgent bridges legacy enterprise Session Border Controllers (SBCs) directly to multi-modal real-time AI endpoints with sub-50ms media processing latency, native SIPREC session forking, and deterministic SIP failover protection.
+A plug-and-play **AI co-pilot and call intelligence platform** for enterprise contact centers. VoiceAgent observes live calls via SIPREC, transcribes in real time, provides agent coaching suggestions, detects robocalls and PII, analyzes voice sentiment, and generates post-call summaries — all running on-premises with zero cloud dependency except the LLM.
+
+**Two deployment modes:** Standalone helper (plug into any SBC, no FreeSWITCH) or full B2BUA gateway (interactive AI agent answers calls).
 
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -19,39 +21,46 @@ An open-core, high-performance **Back-to-Back User Agent (B2BUA)** and media pro
 
 ---
 
-## Network Deployment Topology
+## Deployment Modes
+
+### Mode 1: Standalone Helper (Recommended for Production)
+
+Plug-and-play — point your SBC's SIPREC recording server to VoiceAgent. No FreeSWITCH, no dialplan, no trunk config. The SBC/PBX owns the call; VoiceAgent is a read-only observer.
 
 ```
-                            [ Public Carrier / PSTN ]
-                                      │
-                              (SIP Trunk / RTP G.711)
-                                      │
-                          [ Enterprise SBC ]
-                          (Cisco CUBE, AudioCodes, Oracle)
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    │                                     │
-          (Direct SIP Trunk)                    (SIPREC Fork / RFC 7866)
-                    │                                     │
-                    ▼                                     ▼
-        ┌───────────────────────┐              ┌───────────────────────┐
-        │   VoiceAgent Gateway  │              │   VoiceAgent Gateway  │
-        │   Mode: Interactive   │              │   Mode: Co-Pilot      │
-        │                       │              │                       │
-        │   ┌─ VAD ──────────┐  │              │   ┌─ callerSTT ────┐ │
-        │   │ Whisper STT    │  │              │   │ agentSTT       │ │
-        │   │ PII Masking    │  │              │   │ RAG (ChromaDB) │ │
-        │   │ Claude/Gemini  │  │              │   │ Claude Coach   │ │
-        │   │ Piper TTS      │  │              │   │ SSE → Dashboard│ │
-        │   └────────────────┘  │              │   └────────────────┘ │
-        │                       │              │                       │
-        │   SIP REFER (failover)│              │   POST → CRM Webhook │
-        └───────────┬───────────┘              └───────────┬───────────┘
-                    │                                       │
-                    ▼                                       ▼
-        [ Human Agent Queue ]                  [ Agent Desktop / UI ]
-        (Cisco/Avaya softphone                 (Next.js :3000)
-         receives X-Transfer headers)
+Customer ──► SBC/PBX ──► Human Agent
+                │
+                └── SIPREC (RFC 7866) ──► VoiceAgent :5060
+                                              │
+                                              ├── Live transcript (Whisper STT)
+                                              ├── Co-pilot suggestions (RAG + Claude)
+                                              ├── Robocall detection (3-layer)
+                                              ├── PII masking (9 patterns)
+                                              ├── Voice sentiment (pitch/energy/rate)
+                                              └── SSE → Agent dashboard :3000
+```
+
+```bash
+# Deploy (8 services, no FreeSWITCH)
+docker compose -f docker-compose.helper.yml up -d
+
+# SBC config: point SIPREC recording server to <voiceagent-ip>:5061
+# That's it. Zero VoiceAgent-side configuration.
+```
+
+### Mode 2: Full B2BUA Gateway (Demo / Interactive AI)
+
+VoiceAgent answers calls directly — AI agent speaks to the customer via Piper TTS.
+
+```
+Customer ──► FreeSWITCH ──► Gateway AI Pipeline ──► TTS response
+                                  │
+                            Whisper → Claude → Piper
+```
+
+```bash
+# Deploy (10 services + optional Kamailio SBC lab)
+docker compose -f docker-compose.sip.yml up -d
 ```
 
 ### Port Binding & Network Prerequisites
@@ -207,9 +216,10 @@ Shutdown propagates via channel-close cascade. Circuit breakers use `sync/atomic
 
 | Feature | Description |
 |---------|-------------|
-| **PII Masking** | 7 patterns (credit card, SSN, CVV, DOB, account) — masks before LLM/recording |
+| **PII Masking** | 9 patterns (credit card, SSN, CVV, DOB, account, spoken digits) — masks before LLM/recording |
 | **Voice Biometrics** | 32-dim spectral fingerprint — fraud detection + identity verification |
 | **Robocall Detection** | 3-layer: blocklist (< 1ms) + audio pattern + 28 keyword phrases |
+| **Voice Sentiment** | Acoustic emotion detection — pitch, energy, speaking rate, agitation, frustration scoring |
 
 ### Telecom Infrastructure
 
@@ -234,7 +244,20 @@ Shutdown propagates via channel-close cascade. Circuit breakers use `sync/atomic
 
 ## SBC Integration
 
-### Enterprise SBC Profiles
+### Standalone Helper (1-line SBC config)
+
+Point your SBC's SIPREC recording server to VoiceAgent — nothing else needed on the VoiceAgent side:
+
+| SBC | Configuration |
+|-----|--------------|
+| **Cisco CUBE** | `media-recording <VOICEAGENT_IP> port 5060` |
+| **AudioCodes** | SIP Recording → Recording Server = `<VOICEAGENT_IP>:5060` |
+| **Oracle SBC** | session-recording → destination = `sip:<VOICEAGENT_IP>:5060` |
+| **Kamailio** | `siprec_start_recording("sip:<VOICEAGENT_IP>:5060")` |
+
+Full guide: [`docs/sbc-configuration.md`](docs/sbc-configuration.md)
+
+### Full Gateway Mode (Enterprise SBC Profiles)
 
 Pre-configured profiles at `freeswitch/config/sip_profiles/enterprise/`:
 
@@ -243,21 +266,17 @@ Pre-configured profiles at `freeswitch/config/sip_profiles/enterprise/`:
 | **Cisco CUBE** | `cisco-cube.xml` | G.711/G.722/G.729 | TLS, session timers, OPTIONS keepalive |
 | **AudioCodes Mediant** | `audiocodes.xml` | G.711/G.722/G.729 | Registration mode, NAT traversal, rport |
 
-```bash
-# Configure trunk
-SBC_ADDRESS=cube.internal make sbc-config
+### Local SBC Lab (Mobile Softphone Testing)
 
-# Twilio SIP Trunk
-SBC_ADDRESS=trunk.pstn.twilio.com SBC_REGISTER=true SBC_USERNAME=sid SBC_PASSWORD=token make sbc-config
+Test with real voice calls from your mobile phone on your home LAN:
+
+```bash
+export EXT_IP=$(ipconfig getifaddr en0)
+make sbc-lab    # 11 services: 10 + Kamailio SBC
 ```
 
-### Dialplan Routing
-
-| Destination | Mode | Behavior |
-|-------------|------|----------|
-| `1xxx` | Interactive | AI agent answers, self-service + transfer capable |
-| `2xxx` | Co-Pilot | Passive observation, RAG coaching, post-call summary |
-| `3xxx` | Human Queue | Direct-to-agent (failover target) |
+Softphone config: SIP server `<LAN_IP>`, port `5090`, TCP, username `customer1`, password `1234`.
+Dial `1000` (AI agent) or `2001` (co-pilot with agent). Guide: [`docs/softphone-setup.md`](docs/softphone-setup.md)
 
 ---
 
@@ -399,18 +418,22 @@ Full documentation: [`docs/api-reference.md`](docs/api-reference.md)
 | **LLM** | `/api/llm/configs`, `/api/llm/test` |
 | **Security** | `/api/blocklist`, `/api/robocall/*`, `/api/security/voiceprints`, `/api/security/pii/*` |
 | **Actions** | `/api/actions/webhooks`, `/api/actions/test` |
+| **Co-Pilot** | `/api/copilot/active` (live sessions with voice sentiment + caller/agent identity) |
 | **Infrastructure** | `/api/failover/status`, `/api/scale/status`, `/api/dtmf/test`, `/api/stats`, `/healthz`, `/metrics` |
 
 ---
 
-## Project Structure (17 Go source files, 10 services)
+## Project Structure (20 Go source files, 8-11 services)
 
 ```
 voiceagent/
 ├── gateway/
 │   ├── main.go             # B2BUA core: WebSocket, VAD, ESL, session orchestration
+│   ├── sipserver.go         # Native SIP UAS (sipgo) — accepts SIPREC INVITEs directly
+│   ├── rtplistener.go       # RTP receiver (pion/rtp) — G.711 decode, feeds pipeline
 │   ├── siprec.go           # SIPREC co-pilot: dual-leg STT, coach worker, summary
 │   ├── siprec_meta.go      # RFC 7866 SIPREC metadata XML parser
+│   ├── sentiment.go         # Voice sentiment: pitch, energy, speaking rate, frustration
 │   ├── codec.go            # G.711 μ-law/A-law LUT transcoding + resampler
 │   ├── dtmf.go             # RFC 2833/4733 DTMF parsing + Goertzel inband
 │   ├── agc.go              # AGC + noise gate + comfort noise generation
@@ -442,10 +465,14 @@ voiceagent/
 │   ├── quick-setup.md      # 5-minute setup guide
 │   ├── test-plan.md        # Comprehensive test plan (28 sections, 80+ tests)
 │   └── blog.md             # Technical deep-dive blog
+├── sbc/                    # Kamailio SBC simulator for local testing
 ├── test/                   # livecall, simcall, simcopilot, callcenter-live
-├── docker-compose.sip.yml  # Full platform (10 services)
+├── demos/                  # VHS tape files (GIF recordings) + narrated scripts
+├── docker-compose.helper.yml  # Standalone helper mode (8 services, no FreeSWITCH)
+├── docker-compose.sip.yml     # Full B2BUA platform (10 services)
+├── docker-compose.sbc.yml     # SBC lab overlay (adds Kamailio + softphone profile)
 ├── prometheus.yml          # Prometheus scrape config
-└── Makefile                # kind-up, build, deploy-local/cloud/on-prem, istio-install, mesh-status
+└── Makefile                # helper, sbc-lab, deploy-local/cloud/on-prem, demos
 ```
 
 ---
@@ -460,6 +487,8 @@ voiceagent/
 | Multi-LLM (Claude/Gemini) | Yes | |
 | RAG knowledge base | Yes | |
 | Robocall detection | Yes | |
+| Standalone SIPREC helper (no FreeSWITCH) | | Yes |
+| Voice sentiment (acoustic emotion) | | Yes |
 | SIPREC RFC 7866 parser | | Yes |
 | PII masking (PCI/HIPAA) | | Yes |
 | Voice biometrics | | Yes |
