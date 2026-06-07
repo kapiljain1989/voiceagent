@@ -25,6 +25,8 @@ docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml ps | grep kam
 
 Your Mac's LAN IP (e.g., `192.168.1.156`) is the SIP server address for all softphones.
 
+> **macOS Docker Desktop Note:** Docker Desktop on macOS cannot reliably forward inbound UDP from the LAN to containers. For real voice calls with audio, connect your softphone directly to FreeSWITCH on port **5070**. Use Kamailio on port 5080 for SBC routing/registration feature testing.
+
 ---
 
 ## Mobile Softphone Setup
@@ -33,22 +35,37 @@ Your Mac's LAN IP (e.g., `192.168.1.156`) is the SIP server address for all soft
 
 **Recommended:** Opal SIP, Opal, or any SIP-compatible app from the App Store.
 
+**Option A: Direct to FreeSWITCH (audio works)**
+
 | Setting | Value |
 |---------|-------|
 | SIP Server | `192.168.x.x` (your Mac's LAN IP) |
-| Port | `5080` |
-| Transport | UDP |
+| Port | `5070` |
+| Transport | **TCP** |
 | Username | `customer1` |
 | Password | *(leave empty)* |
 | Display Name | `Customer` |
 | STUN | Disabled |
 | ICE | Disabled |
+| Codec | G.711 u-law (PCMU) |
+
+> Use TCP transport — Docker Desktop on macOS forwards TCP reliably but drops inbound UDP from the LAN.
+
+**Option B: Via Kamailio SBC (SBC feature testing)**
+
+| Setting | Value |
+|---------|-------|
+| SIP Server | `192.168.x.x` |
+| Port | `5080` |
+| Transport | UDP |
+| Username | `customer1` |
+| Password | *(leave empty)* |
+
+> Signaling works for registration and call setup testing. Audio requires Linux host or rtpengine relay.
 
 ### Android
 
-**Recommended:** opal SIP, opal phone, or any SIP-compatible app from Play Store.
-
-Same settings as iOS above.
+Same settings as iOS above — use Option A (port 5070, TCP) for audio.
 
 ### Verify Registration
 
@@ -72,7 +89,7 @@ brew install baresip
 # Configure
 mkdir -p ~/.baresip
 cat > ~/.baresip/accounts <<'EOF'
-<sip:agent1@192.168.x.x:5080>;regint=60;transport=udp
+<sip:agent1@192.168.x.x:5070>;regint=60;transport=tcp
 EOF
 
 cat > ~/.baresip/config <<'EOF'

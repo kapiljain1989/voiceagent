@@ -21,3 +21,9 @@ services:
     depends_on:
       - freeswitch
     restart: unless-stopped
+
+  freeswitch:
+    environment:
+      - EXT_IP=${EXT_IP}
+      - EXTERNAL_RTP_IP=${EXT_IP}
+      - EXTERNAL_SIP_IP=${EXT_IP}
