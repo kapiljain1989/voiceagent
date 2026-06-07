@@ -25,6 +25,8 @@ Complete technical reference for every feature in the VoiceAgent Telecom-Native 
 17. [SBC Connectivity & Enterprise Profiles](#17-sbc-connectivity--enterprise-profiles)
 18. [Deployment Modes](#18-deployment-modes)
 19. [SDKs (Python & TypeScript)](#19-sdks-python--typescript)
+20. [Voice Sentiment Analysis](#20-voice-sentiment-analysis)
+21. [Standalone SIPREC Helper](#21-standalone-siprec-helper)
 
 ---
 
@@ -363,7 +365,7 @@ POST /api/security/voiceprints
 
 ### Detection Patterns
 
-7 regex patterns run on every Whisper transcript before the text reaches Claude or gets stored:
+9 regex patterns run on every Whisper transcript before the text reaches Claude or gets stored:
 
 | Pattern | Example Input | Masked Output | Level |
 |---------|---------------|---------------|-------|
@@ -855,3 +857,118 @@ Full TypeScript types for all models. `EventSource`-based SSE streaming works in
 ### Shared Coverage
 
 Both SDKs cover: agents, calls, documents/RAG, LLM config/test, robocall detection/blocklist, PII masking, voice biometrics, self-service actions/webhooks, DTMF, failover status, dashboard stats, health check, and SSE event streaming.
+
+---
+
+## 20. Voice Sentiment Analysis
+
+**Source:** `gateway/sentiment.go`
+
+Acoustic emotion detection from raw PCM audio — no ML model, pure signal processing. Runs on every audio frame in both co-pilot and interactive pipelines.
+
+### Acoustic Features
+
+| Feature | Method | What it measures |
+|---------|--------|-----------------|
+| **Pitch (F0)** | Autocorrelation | Fundamental frequency — rising pitch indicates frustration |
+| **RMS Energy** | Per-frame calculation | Volume level — increasing energy indicates agitation |
+| **Energy Trend** | First-half vs second-half average | Rising, falling, or stable over call duration |
+| **Speaking Rate** | Words per minute from Whisper | Fast (>150 wpm) = urgency, slow (<100 wpm) = confusion |
+| **Silence Ratio** | Speech frames vs total frames | High silence = disengagement or hesitation |
+| **Pitch Variance** | Standard deviation of F0 estimates | High jitter = emotional instability |
+
+### Derived Signals
+
+| Signal | Formula | Threshold |
+|--------|---------|-----------|
+| **Agitation** | 0.3 x energy + 0.4 x pitch_jitter + 0.3 x speed | > 0.5 = agitated |
+| **Frustration** | 0.4 x agitation + 0.3 x rising_energy + 0.3 x pitch_jitter | > 0.6 = frustrated |
+| **Engagement** | 1.0 - silence_ratio | > 0.7 = engaged |
+
+### Multi-Modal Sentiment
+
+Combines Claude's text-based sentiment with acoustic voice sentiment. If voice frustration > 0.6 but text says "neutral", overrides to "negative". Catches sarcasm and controlled anger that text analysis misses.
+
+### API
+
+- `GET /api/copilot/active` — per-session real-time voice sentiment
+- `/siprec/events` SSE — `summary` event includes `voice_sentiment` object
+- Gateway logs — agitation, frustration, pitch, speaking rate per call
+
+### SentimentResult Schema
+
+```json
+{
+  "avg_energy": 245.3,
+  "energy_trend": "rising",
+  "avg_pitch_hz": 185.0,
+  "pitch_variance": 32.5,
+  "speaking_rate_wpm": 142.0,
+  "silence_ratio": 0.35,
+  "agitation": 0.45,
+  "engagement": 0.65,
+  "frustration": 0.38,
+  "sentiment": "neutral",
+  "confidence": 0.6
+}
+```
+
+---
+
+## 21. Standalone SIPREC Helper
+
+**Source:** `gateway/sipserver.go`, `gateway/rtplistener.go`
+
+Native SIP+RTP endpoint that accepts SIPREC INVITEs directly — no FreeSWITCH dependency. The SBC/PBX owns the call; VoiceAgent is a read-only audio observer.
+
+### Architecture
+
+```
+SBC/PBX (owns the call)
+    |
+    +-- SIPREC INVITE (SIP + RTP) --> VoiceAgent Gateway :5060
+                                           |
+                                           +-- Parse RFC 7866 XML metadata
+                                           +-- Receive RTP (G.711) on port 30000-30050
+                                           +-- Decode G.711 -> PCM via LUT (< 1ms)
+                                           +-- VAD -> Whisper STT -> Claude coaching
+                                           +-- Voice sentiment analysis
+                                           +-- SSE -> Agent dashboard
+```
+
+### Configuration
+
+| Variable | Value | Effect |
+|----------|-------|--------|
+| `VOICEAGENT_MODE=standalone` | Enables SIP server | No FreeSWITCH needed |
+| `VOICEAGENT_MODE=gateway` | Default | FreeSWITCH + WebSocket mode |
+
+### SBC Configuration (one line)
+
+| SBC | Config |
+|-----|--------|
+| **Cisco CUBE** | `media-recording <VOICEAGENT_IP> port 5060` |
+| **AudioCodes** | Recording Server = `<VOICEAGENT_IP>:5060` |
+| **Oracle SBC** | destination = `sip:<VOICEAGENT_IP>:5060` |
+| **Kamailio** | `siprec_start_recording("sip:<VOICEAGENT_IP>:5060")` |
+
+### Deployment
+
+```bash
+docker compose -f docker-compose.helper.yml up -d   # 8 services, no FreeSWITCH
+```
+
+### SIP Stack
+
+- **SIP UAS:** github.com/emiago/sipgo
+- **RTP:** github.com/pion/rtp
+- **SDP:** github.com/pion/sdp
+- **Codec:** Existing G.711 LUT decoder
+
+### Network Requirements
+
+| Port | Protocol | Direction | Purpose |
+|------|----------|-----------|---------|
+| 5060 | UDP+TCP | SBC -> VoiceAgent | SIP SIPREC INVITE/BYE |
+| 30000-30050 | UDP | SBC -> VoiceAgent | RTP audio streams |
+| 8080 | TCP | Browser -> VoiceAgent | HTTP API + SSE |

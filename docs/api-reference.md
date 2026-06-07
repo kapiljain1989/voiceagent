@@ -90,7 +90,7 @@ curl -N http://localhost:8080/siprec/events?call_id=<uuid>
 
 {"type":"transfer","reason":"angry","department":"retention","priority":"urgent","summary":"Customer upset about billing"}
 
-{"type":"summary","summary":"Customer called about water damage claim.","action_items":["File claim within 30 days","Schedule adjuster visit"],"commitments":["Callback within 24 hours"],"sentiment":"neutral","duration":180}
+{"type":"summary","summary":"Customer called about water damage claim.","action_items":["File claim within 30 days","Schedule adjuster visit"],"commitments":["Callback within 24 hours"],"sentiment":"neutral","duration":180,"voice_sentiment":{"avg_energy":245.3,"energy_trend":"rising","avg_pitch_hz":185.0,"pitch_variance":32.5,"speaking_rate_wpm":142.0,"silence_ratio":0.35,"agitation":0.45,"engagement":0.65,"frustration":0.38,"sentiment":"neutral","confidence":0.6}}
 ```
 
 ---
@@ -456,22 +456,23 @@ Enroll a new voice print.
 
 ### `POST /api/security/pii/test`
 
-Test PII masking on text.
+Test PII masking on text. Supports 9 detection patterns: `credit_card`, `ssn`, `ssn_spoken`, `credit_card_spoken`, `cvv`, `dob`, `dob_compact`, `dob_spoken`, `account_number`.
 
 **Request:**
 ```json
-{"text": "My credit card is 4111 1111 1111 1111 and SSN is 123-45-6789"}
+{"text": "My credit card is 4111 1111 1111 1111 and SSN is 123-45-6789 dob 16121968"}
 ```
 
 **Response:**
 ```json
 {
-  "original": "My credit card is 4111 1111 1111 1111 and SSN is 123-45-6789",
-  "masked": "My credit card is XXXX-XXXX-XXXX-#### and SSN is XXX-XX-####",
+  "original": "My credit card is 4111 1111 1111 1111 and SSN is 123-45-6789 dob 16121968",
+  "masked": "My credit card is XXXX-XXXX-XXXX-#### and SSN is XXX-XX-#### DOB [REDACTED]",
   "pii_found": true,
   "detections": [
     {"type": "credit_card", "level": "critical", "masked": "XXXX-XXXX-XXXX-####"},
-    {"type": "ssn", "level": "critical", "masked": "XXX-XX-####"}
+    {"type": "ssn", "level": "critical", "masked": "XXX-XX-####"},
+    {"type": "dob_compact", "level": "high", "masked": "DOB [REDACTED]"}
   ]
 }
 ```
@@ -597,8 +598,57 @@ Health check.
 
 **Response:**
 ```json
-{"status": "ok", "sessions": 3}
+{"status": "ok", "sessions": 3, "mode": "gateway"}
 ```
+
+### `GET /api/copilot/active`
+
+Returns active co-pilot (SIPREC) sessions with real-time voice sentiment and caller/agent identity.
+
+**Response:**
+```json
+[
+  {
+    "call_id": "7d698d99-84d8-4c6c-93bc-86aed21ed91e",
+    "started_at": "2026-06-07T21:33:30Z",
+    "duration": 45,
+    "caller": "+15551234567",
+    "agent": "agent1",
+    "voice_sentiment": {
+      "avg_energy": 245.3,
+      "energy_trend": "rising",
+      "avg_pitch_hz": 185.0,
+      "pitch_variance": 32.5,
+      "speaking_rate_wpm": 142.0,
+      "silence_ratio": 0.35,
+      "agitation": 0.45,
+      "engagement": 0.65,
+      "frustration": 0.38,
+      "sentiment": "neutral",
+      "confidence": 0.6
+    }
+  }
+]
+```
+
+### `GET /api/config`
+
+Returns current gateway configuration and deployment mode.
+
+**Response:**
+```json
+{
+  "mode": "standalone",
+  "sip_listen": ":5060",
+  "stt_url": "http://whisper:8000/v1/audio/transcriptions",
+  "tts_url": "http://piper:5000",
+  "claude_model": "claude-3-5-haiku@20241022"
+}
+```
+
+**Mode values:**
+- `standalone` — Native SIP SIPREC helper (no FreeSWITCH)
+- `gateway` — Full B2BUA with FreeSWITCH (default)
 
 ---
 

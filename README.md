@@ -460,7 +460,7 @@ voiceagent/
 │   ├── gateway-api/        # Gateway + HTTPRoutes (gateway, UI, Grafana)
 │   └── overlays/           # local (KinD), cloud (LB), on-prem (MetalLB), air-gapped
 ├── docs/
-│   ├── features.md         # Complete feature reference (19 features, 857 lines)
+│   ├── features.md         # Complete feature reference (21 features, 857 lines)
 │   ├── api-reference.md    # Full API documentation (25+ endpoints)
 │   ├── quick-setup.md      # 5-minute setup guide
 │   ├── test-plan.md        # Comprehensive test plan (28 sections, 80+ tests)
@@ -512,7 +512,7 @@ voiceagent/
 
 | Document | Description |
 |----------|-------------|
-| [`docs/features.md`](docs/features.md) | Complete feature reference — all 19 features with source code, schemas, and pipeline details (857 lines) |
+| [`docs/features.md`](docs/features.md) | Complete feature reference — all 21 features with source code, schemas, and pipeline details (857 lines) |
 | [`docs/api-reference.md`](docs/api-reference.md) | Full API documentation — 25+ endpoints with request/response examples |
 | [`docs/quick-setup.md`](docs/quick-setup.md) | 5-minute setup guide — prerequisites, deployment, testing, troubleshooting |
 | [`docs/test-plan.md`](docs/test-plan.md) | Comprehensive test plan — 28 sections, 80+ test cases, load tests, E2E scenarios |
