@@ -23,11 +23,26 @@ interface SuggestionEntry {
   time: string;
 }
 
+interface VoiceSentimentData {
+  avg_energy: number;
+  energy_trend: string;
+  avg_pitch_hz: number;
+  pitch_variance: number;
+  speaking_rate_wpm: number;
+  silence_ratio: number;
+  agitation: number;
+  engagement: number;
+  frustration: number;
+  sentiment: string;
+  confidence: number;
+}
+
 interface SummaryData {
   summary: string;
   action_items: string[];
   sentiment: string;
   duration: number;
+  voice_sentiment?: VoiceSentimentData;
 }
 
 const categoryStyle: Record<string, { bg: string; label: string }> = {
@@ -44,7 +59,7 @@ export default function LiveOpsPage() {
   const [suggestions, setSuggestions] = useState<SuggestionEntry[]>([]);
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [dialNumber, setDialNumber] = useState("");
-  const [activeSessions, setActiveSessions] = useState<Array<{call_id: string; duration: number}>>([]);
+  const [activeSessions, setActiveSessions] = useState<Array<{call_id: string; duration: number; voice_sentiment?: VoiceSentimentData}>>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -108,6 +123,7 @@ export default function LiveOpsPage() {
             action_items: data.action_items || [],
             sentiment: data.sentiment || "neutral",
             duration: data.duration || 0,
+            voice_sentiment: data.voice_sentiment || undefined,
           });
         }
       } catch {}
@@ -163,6 +179,19 @@ export default function LiveOpsPage() {
         <div className="flex items-center gap-2">
           {connected && (
             <>
+              {/* Live sentiment from active session poll */}
+              {activeSessions.find(s => s.call_id === callID)?.voice_sentiment && (() => {
+                const vs = activeSessions.find(s => s.call_id === callID)!.voice_sentiment!;
+                const mood = vs.frustration > 0.6 ? "FRUSTRATED" : vs.agitation > 0.5 ? "AGITATED" : vs.engagement > 0.6 ? "ENGAGED" : "CALM";
+                const moodColor = vs.frustration > 0.6 ? "bg-rose-500/15 text-rose-400 border-rose-500/25" :
+                  vs.agitation > 0.5 ? "bg-amber-500/15 text-amber-400 border-amber-500/25" :
+                  "bg-emerald-500/15 text-emerald-400 border-emerald-500/25";
+                return (
+                  <Badge variant="outline" className={`${moodColor} font-mono text-[10px]`}>
+                    {mood}
+                  </Badge>
+                );
+              })()}
               <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 font-mono text-xs">
                 CALL: {callID.slice(0, 16)}...
               </Badge>
@@ -186,19 +215,36 @@ export default function LiveOpsPage() {
                 {activeSessions.length} ACTIVE SESSION{activeSessions.length > 1 ? "S" : ""}
               </div>
               <div className="space-y-2">
-                {activeSessions.map((s) => (
-                  <div key={s.call_id} className="flex items-center justify-between p-2 rounded bg-[#070b14] border border-emerald-500/20">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="font-mono text-xs text-slate-300">{s.call_id.slice(0, 20)}...</span>
-                      <span className="font-mono text-[10px] text-slate-500">{s.duration}s</span>
+                {activeSessions.map((s) => {
+                  const vs = s.voice_sentiment;
+                  const moodColor = vs && vs.frustration > 0.6 ? "border-rose-500/30" :
+                    vs && vs.agitation > 0.5 ? "border-amber-500/30" : "border-emerald-500/20";
+                  const moodDot = vs && vs.frustration > 0.6 ? "bg-rose-500" :
+                    vs && vs.agitation > 0.5 ? "bg-amber-500" : "bg-emerald-500";
+                  return (
+                    <div key={s.call_id} className={`flex items-center justify-between p-2 rounded bg-[#070b14] border ${moodColor}`}>
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${moodDot} animate-pulse`} />
+                        <span className="font-mono text-xs text-slate-300">{s.call_id.slice(0, 16)}...</span>
+                        <span className="font-mono text-[10px] text-slate-500">{s.duration}s</span>
+                        {vs && (
+                          <div className="flex gap-1.5 ml-1">
+                            <span className="font-mono text-[9px] text-slate-500" title="Agitation">
+                              AGT:<span className={vs.agitation > 0.5 ? "text-amber-400" : "text-slate-500"}>{(vs.agitation * 100).toFixed(0)}%</span>
+                            </span>
+                            <span className="font-mono text-[9px] text-slate-500" title="Frustration">
+                              FRS:<span className={vs.frustration > 0.6 ? "text-rose-400" : "text-slate-500"}>{(vs.frustration * 100).toFixed(0)}%</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <Button onClick={() => { setCallID(s.call_id); connectToCall(s.call_id); }}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-[10px] px-3 py-1 h-6">
+                        CONNECT
+                      </Button>
                     </div>
-                    <Button onClick={() => { setCallID(s.call_id); connectToCall(s.call_id); }}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-[10px] px-3 py-1 h-6">
-                      CONNECT
-                    </Button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -266,17 +312,62 @@ export default function LiveOpsPage() {
                   <div className="text-[10px] font-mono font-semibold text-amber-400 tracking-wider mb-2">CALL SUMMARY</div>
                   <p className="text-sm text-slate-300 mb-3">{summary.summary}</p>
                   {summary.action_items.length > 0 && (
-                    <div className="mb-2">
+                    <div className="mb-3">
                       <div className="text-[10px] font-mono text-slate-500 mb-1">ACTION ITEMS</div>
                       {summary.action_items.map((item, i) => (
                         <div key={i} className="text-sm text-slate-400 pl-3 border-l border-amber-500/30 mb-1">{item}</div>
                       ))}
                     </div>
                   )}
-                  <div className="flex gap-4 text-[10px] font-mono text-slate-500">
-                    <span>Sentiment: <span className={summary.sentiment === "positive" ? "text-emerald-400" : summary.sentiment === "negative" ? "text-rose-400" : "text-slate-400"}>{summary.sentiment}</span></span>
+                  <div className="flex gap-4 text-[10px] font-mono text-slate-500 mb-3">
+                    <span>Sentiment: <span className={summary.sentiment === "positive" ? "text-emerald-400" : summary.sentiment === "negative" ? "text-rose-400" : "text-slate-400"}>{summary.sentiment.toUpperCase()}</span></span>
                     <span>Duration: {summary.duration}s</span>
                   </div>
+
+                  {/* Voice Sentiment Analysis */}
+                  {summary.voice_sentiment && (
+                    <div className="p-3 rounded bg-[#070b14] border border-slate-700/50">
+                      <div className="text-[10px] font-mono text-cyan-400 tracking-wider mb-2">VOICE SENTIMENT ANALYSIS</div>
+                      <div className="grid grid-cols-3 gap-3 mb-3">
+                        <div className="text-center">
+                          <div className="text-[10px] font-mono text-slate-500">AGITATION</div>
+                          <div className={`font-mono text-lg ${summary.voice_sentiment.agitation > 0.6 ? "text-rose-400" : summary.voice_sentiment.agitation > 0.3 ? "text-amber-400" : "text-emerald-400"}`}>
+                            {(summary.voice_sentiment.agitation * 100).toFixed(0)}%
+                          </div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-[10px] font-mono text-slate-500">FRUSTRATION</div>
+                          <div className={`font-mono text-lg ${summary.voice_sentiment.frustration > 0.6 ? "text-rose-400" : summary.voice_sentiment.frustration > 0.3 ? "text-amber-400" : "text-emerald-400"}`}>
+                            {(summary.voice_sentiment.frustration * 100).toFixed(0)}%
+                          </div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-[10px] font-mono text-slate-500">ENGAGEMENT</div>
+                          <div className={`font-mono text-lg ${summary.voice_sentiment.engagement > 0.6 ? "text-emerald-400" : summary.voice_sentiment.engagement > 0.3 ? "text-amber-400" : "text-rose-400"}`}>
+                            {(summary.voice_sentiment.engagement * 100).toFixed(0)}%
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2 text-[10px] font-mono text-slate-500">
+                        <div>
+                          <span className="text-slate-600">PITCH</span>
+                          <div className="text-slate-300">{summary.voice_sentiment.avg_pitch_hz.toFixed(0)} Hz</div>
+                        </div>
+                        <div>
+                          <span className="text-slate-600">ENERGY</span>
+                          <div className="text-slate-300">{summary.voice_sentiment.energy_trend}</div>
+                        </div>
+                        <div>
+                          <span className="text-slate-600">SPEED</span>
+                          <div className="text-slate-300">{summary.voice_sentiment.speaking_rate_wpm.toFixed(0)} wpm</div>
+                        </div>
+                        <div>
+                          <span className="text-slate-600">SILENCE</span>
+                          <div className="text-slate-300">{(summary.voice_sentiment.silence_ratio * 100).toFixed(0)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
