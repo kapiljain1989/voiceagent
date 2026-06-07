@@ -245,6 +245,9 @@ func main() {
 	auth := NewAuthHandler(api.db, envOr("JWT_SECRET", ""))
 	auth.RegisterRoutes(mux)
 
+	trunks := NewTrunkHandler(api.db, gw)
+	trunks.RegisterRoutes(mux)
+
 	// Wrap all routes with CORS + auth middleware
 	var handler http.Handler = mux
 	if envOr("AUTH_ENABLED", "") == "true" {

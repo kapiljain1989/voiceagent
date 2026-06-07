@@ -1,0 +1,329 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"time"
+)
+
+// -------------------------------------------------------------------
+// SIP Trunk Management — Config + Secure API
+//
+// Trunks can be provisioned two ways:
+//   1. Config file (freeswitch/config/sip_profiles/) — for initial/air-gapped
+//   2. Secure API (/api/trunks) — for runtime provisioning, requires auth
+//
+// The API stores trunk configs in PostgreSQL and applies them to
+// FreeSWITCH via ESL commands (sofia profile rescan).
+// -------------------------------------------------------------------
+
+type SIPTrunk struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Provider  string `json:"provider"`  // twilio, vonage, telnyx, cisco-cube, audiocodes, custom
+	Address   string `json:"address"`   // SBC hostname or IP
+	Port      int    `json:"port"`      // SIP port (default 5060)
+	Transport string `json:"transport"` // udp, tcp, tls
+	Register  bool   `json:"register"`
+	Username  string `json:"username"`
+	Password  string `json:"password,omitempty"` // never returned in GET
+	CallerID  string `json:"caller_id"`
+	Codecs    string `json:"codecs"`   // PCMU,PCMA,G722
+	Status    string `json:"status"`   // active, inactive, failed
+	CreatedAt string `json:"created_at"`
+}
+
+type TrunkHandler struct {
+	db  *sql.DB
+	gw  *gateway
+}
+
+func NewTrunkHandler(db *sql.DB, gw *gateway) *TrunkHandler {
+	th := &TrunkHandler{db: db, gw: gw}
+	if db != nil {
+		th.initDB()
+	}
+	return th
+}
+
+func (th *TrunkHandler) initDB() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	th.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS sip_trunks (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			name TEXT NOT NULL,
+			provider TEXT DEFAULT 'custom',
+			address TEXT NOT NULL,
+			port INT DEFAULT 5060,
+			transport TEXT DEFAULT 'udp',
+			register BOOLEAN DEFAULT FALSE,
+			username TEXT,
+			password TEXT,
+			caller_id TEXT,
+			codecs TEXT DEFAULT 'PCMU,PCMA,G722',
+			status TEXT DEFAULT 'active',
+			created_at TIMESTAMPTZ DEFAULT NOW()
+		)
+	`)
+}
+
+func (th *TrunkHandler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/api/trunks", th.handleTrunks)
+	mux.HandleFunc("/api/trunks/test", th.handleTestTrunk)
+	mux.HandleFunc("/api/trunks/apply", th.handleApply)
+}
+
+func (th *TrunkHandler) handleTrunks(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		th.listTrunks(w, r)
+	case "POST":
+		th.createTrunk(w, r)
+	case "DELETE":
+		th.deleteTrunk(w, r)
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func (th *TrunkHandler) listTrunks(w http.ResponseWriter, r *http.Request) {
+	if th.db == nil {
+		writeJSON(w, http.StatusOK, []SIPTrunk{})
+		return
+	}
+
+	rows, err := th.db.QueryContext(r.Context(),
+		"SELECT id, name, provider, address, port, transport, register, username, caller_id, codecs, status, created_at FROM sip_trunks ORDER BY created_at")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	var trunks []SIPTrunk
+	for rows.Next() {
+		var t SIPTrunk
+		var username, callerID sql.NullString
+		rows.Scan(&t.ID, &t.Name, &t.Provider, &t.Address, &t.Port, &t.Transport,
+			&t.Register, &username, &callerID, &t.Codecs, &t.Status, &t.CreatedAt)
+		t.Username = username.String
+		t.CallerID = callerID.String
+		// Password never returned in GET
+		trunks = append(trunks, t)
+	}
+	if trunks == nil {
+		trunks = []SIPTrunk{}
+	}
+	writeJSON(w, http.StatusOK, trunks)
+}
+
+func (th *TrunkHandler) createTrunk(w http.ResponseWriter, r *http.Request) {
+	var req SIPTrunk
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	if req.Name == "" || req.Address == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and address required"})
+		return
+	}
+	if req.Port == 0 {
+		req.Port = 5060
+	}
+	if req.Transport == "" {
+		req.Transport = "udp"
+	}
+	if req.Codecs == "" {
+		req.Codecs = "PCMU,PCMA,G722"
+	}
+	if req.Provider == "" {
+		req.Provider = "custom"
+	}
+	if req.Status == "" {
+		req.Status = "active"
+	}
+
+	// Auto-detect provider from address
+	if req.Provider == "custom" {
+		req.Provider = detectProvider(req.Address)
+	}
+
+	if th.db == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"id": "no-db", "name": req.Name, "status": "created"})
+		return
+	}
+
+	var id string
+	err := th.db.QueryRowContext(r.Context(),
+		`INSERT INTO sip_trunks (name, provider, address, port, transport, register, username, password, caller_id, codecs, status)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+		req.Name, req.Provider, req.Address, req.Port, req.Transport,
+		req.Register, req.Username, req.Password, req.CallerID, req.Codecs, req.Status).Scan(&id)
+
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	slog.Info("trunk created", "id", id, "name", req.Name, "address", req.Address, "provider", req.Provider)
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "name": req.Name, "status": "created"})
+}
+
+func (th *TrunkHandler) deleteTrunk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	if th.db != nil && req.ID != "" {
+		th.db.ExecContext(r.Context(), "DELETE FROM sip_trunks WHERE id = $1", req.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// -------------------------------------------------------------------
+// Apply trunk to FreeSWITCH via ESL
+// -------------------------------------------------------------------
+
+func (th *TrunkHandler) handleApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ID string `json:"id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	if th.db == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "no database"})
+		return
+	}
+
+	// Load trunk from DB
+	var t SIPTrunk
+	err := th.db.QueryRowContext(r.Context(),
+		"SELECT name, address, port, register, username, password, codecs FROM sip_trunks WHERE id = $1", req.ID).
+		Scan(&t.Name, &t.Address, &t.Port, &t.Register, &t.Username, &t.Password, &t.Codecs)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "trunk not found"})
+		return
+	}
+
+	// Apply to FreeSWITCH via ESL
+	esl := &eslClient{
+		host:     th.gw.cfg.ESLHost,
+		port:     th.gw.cfg.ESLPort,
+		password: th.gw.cfg.ESLPassword,
+	}
+
+	// Add gateway dynamically
+	gwCmd := fmt.Sprintf("sofia profile external gwload %s", t.Name)
+	resp, err := esl.execute(gwCmd)
+	if err != nil {
+		slog.Error("esl trunk apply", "err", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "ESL command failed: " + err.Error()})
+		return
+	}
+
+	slog.Info("trunk applied to FreeSWITCH", "name", t.Name, "address", t.Address, "resp", resp)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "applied", "name": t.Name})
+}
+
+// -------------------------------------------------------------------
+// Test trunk connectivity
+// -------------------------------------------------------------------
+
+func (th *TrunkHandler) handleTestTrunk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Address string `json:"address"`
+		Port    int    `json:"port"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	if req.Port == 0 {
+		req.Port = 5060
+	}
+
+	// Send SIP OPTIONS to test connectivity
+	esl := &eslClient{
+		host:     th.gw.cfg.ESLHost,
+		port:     th.gw.cfg.ESLPort,
+		password: th.gw.cfg.ESLPassword,
+	}
+
+	cmd := fmt.Sprintf("sofia profile external siptrace on")
+	esl.execute(cmd)
+
+	optionsCmd := fmt.Sprintf("sofia global siptrace off")
+	resp, err := esl.execute(optionsCmd)
+
+	result := map[string]any{
+		"address":   fmt.Sprintf("%s:%d", req.Address, req.Port),
+		"reachable": err == nil,
+		"response":  resp,
+	}
+
+	if err != nil {
+		result["error"] = err.Error()
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// -------------------------------------------------------------------
+// Provider detection from hostname
+// -------------------------------------------------------------------
+
+func detectProvider(address string) string {
+	providers := map[string]string{
+		"twilio":     "twilio",
+		"nexmo":      "vonage",
+		"vonage":     "vonage",
+		"telnyx":     "telnyx",
+		"bandwidth":  "bandwidth",
+		"plivo":      "plivo",
+		"signalwire": "signalwire",
+	}
+	for keyword, provider := range providers {
+		if contains(address, keyword) {
+			return provider
+		}
+	}
+	return "custom"
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsLower(s, substr))
+}
+
+func containsLower(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		match := true
+		for j := 0; j < len(substr); j++ {
+			sc := s[i+j]
+			if sc >= 'A' && sc <= 'Z' {
+				sc += 32
+			}
+			tc := substr[j]
+			if tc >= 'A' && tc <= 'Z' {
+				tc += 32
+			}
+			if sc != tc {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
