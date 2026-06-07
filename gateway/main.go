@@ -1112,14 +1112,26 @@ func piiTypes(detections []PIIDetection) string {
 // Only filters exact hallucination patterns — real phrases like "Thank you very much" pass through.
 func isWhisperHallucination(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))
-	cleaned := strings.NewReplacer(".", "", ",", "", "!", "", "?", "").Replace(lower)
+	cleaned := strings.NewReplacer(".", "", ",", "", "!", "", "?", "", "'", "").Replace(lower)
 	cleaned = strings.TrimSpace(cleaned)
 
-	// Exact match hallucinations (the full text IS the hallucination)
+	// Empty after cleanup
+	if cleaned == "" {
+		return true
+	}
+
+	// Dots/ellipsis only: ". . . . ." or "... ... ..."
+	noDots := strings.NewReplacer(".", "", " ", "").Replace(lower)
+	if len(noDots) == 0 {
+		return true
+	}
+
+	// Exact match hallucinations (1-3 word phrases)
 	exact := []string{
 		"thank you", "thanks", "thanks for watching", "thanks for listening",
-		"bye", "goodbye", "you", "okay", "oh",
-		"hmm", "uh", "um", "so",
+		"bye", "goodbye", "you", "okay", "oh", "yeah", "yes", "no",
+		"hmm", "uh", "um", "so", "i dont know", "i don't know",
+		"all right", "alright", "right", "sure",
 	}
 	for _, h := range exact {
 		if cleaned == h {
@@ -1127,12 +1139,12 @@ func isWhisperHallucination(text string) bool {
 		}
 	}
 
-	// Repetition patterns: "Thank you. Thank you. Thank you."
+	// Repetition: any phrase repeated 3+ times
 	repeats := []string{
 		"thank you", "all right", "alright", "okay", "good",
 		"yeah", "yes", "no", "day", "i'm sorry", "sorry",
-		"we'll be right back", "we're", "you're here",
-		"ladies and gentlemen",
+		"we'll be right back", "ladies and gentlemen",
+		"i don't know", "hello", "we're",
 	}
 	for _, h := range repeats {
 		if strings.Count(lower, h) >= 3 {
@@ -1140,24 +1152,18 @@ func isWhisperHallucination(text string) bool {
 		}
 	}
 
-	// Generic repetition: any word/phrase repeated 5+ times is hallucination
+	// Generic repetition: any single word is >50% of all words and appears 4+ times
 	words := strings.Fields(cleaned)
-	if len(words) >= 5 {
+	if len(words) >= 4 {
 		counts := make(map[string]int)
 		for _, w := range words {
 			counts[w]++
 		}
 		for _, c := range counts {
-			if c >= 5 && float64(c)/float64(len(words)) > 0.5 {
+			if c >= 4 && float64(c)/float64(len(words)) > 0.4 {
 				return true
 			}
 		}
-	}
-
-	// Dots/ellipsis only
-	dotsOnly := strings.ReplaceAll(strings.ReplaceAll(cleaned, " ", ""), ".", "")
-	if len(dotsOnly) == 0 && len(cleaned) > 0 {
-		return true
 	}
 
 	return false
