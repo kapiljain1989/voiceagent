@@ -9,6 +9,8 @@ const nav = [
   { href: "/calls", label: "Calls", icon: "phone", shortcut: "C" },
   { href: "/calls/live", label: "Live Ops", icon: "radio", shortcut: "L" },
   { href: "/documents", label: "Knowledge", icon: "file", shortcut: "K" },
+  { href: "/security", label: "Security", icon: "shield", shortcut: "X" },
+  { href: "/infrastructure", label: "Infra", icon: "server", shortcut: "I" },
   { href: "/settings", label: "Config", icon: "sliders", shortcut: "S" },
 ];
 
@@ -46,6 +48,19 @@ const icons: Record<string, React.ReactNode> = {
       <polyline points="14,2 14,8 20,8" />
       <line x1="16" y1="13" x2="8" y2="13" />
       <line x1="16" y1="17" x2="8" y2="17" />
+    </svg>
+  ),
+  shield: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  ),
+  server: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+      <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+      <line x1="6" y1="6" x2="6.01" y2="6" />
+      <line x1="6" y1="18" x2="6.01" y2="18" />
     </svg>
   ),
   sliders: (
