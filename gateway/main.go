@@ -1126,11 +1126,11 @@ func isWhisperHallucination(text string) bool {
 		return true
 	}
 
-	// Exact match hallucinations (1-3 word phrases)
+	// Exact match hallucinations (1-3 word phrases that Whisper generates from silence)
 	exact := []string{
 		"thank you", "thanks", "thanks for watching", "thanks for listening",
 		"bye", "goodbye", "you", "okay", "oh", "yeah", "yes", "no",
-		"hmm", "uh", "um", "so", "i dont know", "i don't know",
+		"hmm", "uh", "um", "so", "i dont know",
 		"all right", "alright", "right", "sure",
 	}
 	for _, h := range exact {
