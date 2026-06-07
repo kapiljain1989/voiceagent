@@ -4,7 +4,8 @@ An open-core, high-performance **Back-to-Back User Agent (B2BUA)** and media pro
 
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-7_services-2496ED?logo=docker)](docker-compose.sip.yml)
+[![Docker](https://img.shields.io/badge/Docker-10_services-2496ED?logo=docker)](docker-compose.sip.yml)
+[![Kubernetes](https://img.shields.io/badge/K8s-Istio_+_Gateway_API-326CE5?logo=kubernetes)](k8s/)
 
 ---
 
@@ -115,7 +116,7 @@ cd voiceagent
 # Set your host IP for SIP RTP address advertisement in SDP
 export EXT_IP=$(ipconfig getifaddr en0)
 
-# Start all 7 services
+# Start all 10 services
 docker compose -f docker-compose.sip.yml up -d
 
 # Verify SIP signaling binding
@@ -131,17 +132,33 @@ open http://localhost:3000
 
 Your local environment is now accepting inbound SIP INVITEs and routing media through the AI pipeline.
 
-### Kubernetes Deployment (KinD / On-Prem / Air-Gapped)
+### Kubernetes Deployment (Istio + Gateway API)
+
+All 10 services deploy to K8s with Istio service mesh (STRICT mTLS) and Gateway API for HTTP/WebSocket ingress. FreeSWITCH is excluded from the mesh — SIP/RTP requires direct UDP access.
 
 ```bash
-# Local KinD cluster
-make all
+# Local KinD cluster (hostNetwork FreeSWITCH)
+make all                    # kind-up → build-all → load-all → secret → deploy-local
 
-# Enterprise on-premises (private SIP trunk to Cisco CUBE)
-kubectl apply -k k8s/overlays/on-prem
+# Cloud (GKE/EKS/AKS — LoadBalancer for SIP/RTP)
+make deploy-cloud           # installs Istio, applies cloud overlay
+make freeswitch-ip          # discovers LB IP, configures FreeSWITCH ext-rtp-ip
 
-# Air-gapped (zero internet — local Ollama LLM, local Whisper, local Piper)
+# Enterprise on-premises (MetalLB L2 for FreeSWITCH LB IP)
+make deploy-on-prem         # installs Istio + MetalLB, applies on-prem overlay
+
+# Air-gapped (zero internet — local Ollama LLM, no egress ServiceEntries)
 kubectl apply -k k8s/overlays/air-gapped
+```
+
+```bash
+# Verify mesh status
+make mesh-status            # istioctl proxy-status + mTLS check
+
+# Port-forward services for local access
+make port-forward-ui        # localhost:3000
+make port-forward-grafana   # localhost:3001
+make port-forward-prometheus # localhost:9090
 ```
 
 ---
@@ -245,6 +262,22 @@ SBC_ADDRESS=trunk.pstn.twilio.com SBC_REGISTER=true SBC_USERNAME=sid SBC_PASSWOR
 ---
 
 ## Production Scale Infrastructure
+
+### Istio Service Mesh + Gateway API
+
+All 10 services deploy to K8s with Istio for zero-trust networking:
+
+| Layer | Implementation | Purpose |
+|-------|----------------|---------|
+| **mTLS** | Istio PeerAuthentication (STRICT) | Encrypted service-to-service traffic |
+| **Circuit Breaking** | Istio DestinationRules | Connection pool limits, outlier ejection per service |
+| **Authorization** | Istio AuthorizationPolicies | Deny-by-default, per-service allow rules |
+| **Ingress** | Gateway API HTTPRoutes | HTTP/WebSocket routing to gateway API, UI, Grafana |
+| **Egress** | Istio ServiceEntries | Controlled access to Vertex AI + HuggingFace |
+| **Network Policies** | K8s NetworkPolicy | CNI-level defense-in-depth under Istio |
+| **Observability** | Istio Telemetry → Prometheus | Envoy sidecar metrics + access logging |
+
+FreeSWITCH is excluded from the mesh (`sidecar.istio.io/inject: "false"`) — SIP/RTP requires raw UDP access. In cloud environments, a dedicated LoadBalancer with `externalTrafficPolicy: Local` exposes SIP (5060) and RTP (16000-16020) directly. On-prem uses MetalLB L2 for the same purpose.
 
 ### Horizontal Gateway Scaling (Redis)
 
@@ -399,8 +432,10 @@ voiceagent/
 │   ├── python/             # pip-installable Python SDK
 │   └── typescript/         # npm TypeScript SDK
 ├── k8s/
-│   ├── base/               # Kustomize base manifests
-│   └── overlays/           # on-prem, private-vpc, air-gapped
+│   ├── base/               # All 10 services + NetworkPolicies + secrets
+│   ├── istio/              # PeerAuth, DestinationRules, AuthZ, ServiceEntries
+│   ├── gateway-api/        # Gateway + HTTPRoutes (gateway, UI, Grafana)
+│   └── overlays/           # local (KinD), cloud (LB), on-prem (MetalLB), air-gapped
 ├── docs/
 │   ├── features.md         # Complete feature reference (19 features, 857 lines)
 │   ├── api-reference.md    # Full API documentation (25+ endpoints)
@@ -410,7 +445,7 @@ voiceagent/
 ├── test/                   # livecall, simcall, simcopilot, callcenter-live
 ├── docker-compose.sip.yml  # Full platform (10 services)
 ├── prometheus.yml          # Prometheus scrape config
-└── Makefile                # kind-up, build, load, deploy, sbc-config
+└── Makefile                # kind-up, build, deploy-local/cloud/on-prem, istio-install, mesh-status
 ```
 
 ---
@@ -438,6 +473,8 @@ voiceagent/
 | Worker pool load balancing | | Yes |
 | Prometheus metrics + Grafana | | Yes |
 | Rate limiting + admission control | | Yes |
+| Istio mesh + Gateway API | | Yes |
+| K8s overlays (cloud/on-prem/air-gapped) | | Yes |
 | Air-gapped deployment | | Yes |
 
 ---
