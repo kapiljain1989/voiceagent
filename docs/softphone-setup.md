@@ -40,14 +40,16 @@ Your Mac's LAN IP (e.g., `192.168.1.156`) is the SIP server address for all soft
 | Setting | Value |
 |---------|-------|
 | SIP Server | `192.168.x.x` (your Mac's LAN IP) |
-| Port | `5070` |
+| Port | **`5090`** |
 | Transport | **TCP** |
 | Username | `customer1` |
-| Password | *(leave empty)* |
+| Password | **`1234`** |
 | Display Name | `Customer` |
 | STUN | Disabled |
 | ICE | Disabled |
 | Codec | G.711 u-law (PCMU) |
+
+Available users: `customer1`, `customer2`, `agent1` — all with password `1234`.
 
 > Use TCP transport — Docker Desktop on macOS forwards TCP reliably but drops inbound UDP from the LAN.
 
@@ -89,7 +91,7 @@ brew install baresip
 # Configure
 mkdir -p ~/.baresip
 cat > ~/.baresip/accounts <<'EOF'
-<sip:agent1@192.168.x.x:5070>;regint=60;transport=tcp
+<sip:agent1@192.168.x.x:5090>;regint=60;transport=tcp;auth_pass=1234
 EOF
 
 cat > ~/.baresip/config <<'EOF'

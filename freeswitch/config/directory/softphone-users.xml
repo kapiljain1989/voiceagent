@@ -1,0 +1,32 @@
+<include>
+  <user id="customer1">
+    <params>
+      <param name="password" value="1234"/>
+    </params>
+    <variables>
+      <variable name="user_context" value="public"/>
+      <variable name="effective_caller_id_name" value="Customer"/>
+      <variable name="effective_caller_id_number" value="customer1"/>
+    </variables>
+  </user>
+  <user id="customer2">
+    <params>
+      <param name="password" value="1234"/>
+    </params>
+    <variables>
+      <variable name="user_context" value="public"/>
+      <variable name="effective_caller_id_name" value="Customer 2"/>
+      <variable name="effective_caller_id_number" value="customer2"/>
+    </variables>
+  </user>
+  <user id="agent1">
+    <params>
+      <param name="password" value="1234"/>
+    </params>
+    <variables>
+      <variable name="user_context" value="public"/>
+      <variable name="effective_caller_id_name" value="Agent"/>
+      <variable name="effective_caller_id_number" value="agent1"/>
+    </variables>
+  </user>
+</include>

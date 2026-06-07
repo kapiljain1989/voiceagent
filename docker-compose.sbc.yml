@@ -1,7 +1,7 @@
 # docker-compose.sbc.yml — Local SBC Lab Extension
 #
-# Adds Kamailio SBC simulator for testing SBC features with
-# real softphones on your home LAN.
+# Adds Kamailio SBC simulator and a softphone-friendly FreeSWITCH
+# profile for mobile/laptop SIP registration with audio.
 #
 # Usage:
 #   export EXT_IP=$(ipconfig getifaddr en0)
@@ -9,6 +9,10 @@
 #
 # Or:
 #   make sbc-lab
+#
+# Softphone config:
+#   SIP server: <LAN_IP>  Port: 5090  Transport: TCP
+#   Username: customer1   Password: 1234
 
 services:
   kamailio:
@@ -23,7 +27,13 @@ services:
     restart: unless-stopped
 
   freeswitch:
+    ports:
+      - "5090:5090/tcp"
+      - "5090:5090/udp"
     environment:
       - EXT_IP=${EXT_IP}
       - EXTERNAL_RTP_IP=${EXT_IP}
       - EXTERNAL_SIP_IP=${EXT_IP}
+    volumes:
+      - ./freeswitch/config/sip_profiles/softphone.xml:/usr/local/freeswitch/conf/sip_profiles/softphone.xml:ro
+      - ./freeswitch/config/directory/softphone-users.xml:/usr/local/freeswitch/conf/directory/default/softphone-users.xml:ro

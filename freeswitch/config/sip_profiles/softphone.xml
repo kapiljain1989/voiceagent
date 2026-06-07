@@ -1,0 +1,25 @@
+<profile name="softphone">
+  <gateways/>
+  <domains>
+    <domain name="all" alias="true" parse="true"/>
+  </domains>
+  <settings>
+    <param name="sip-ip" value="0.0.0.0"/>
+    <param name="sip-port" value="5090"/>
+    <param name="ext-sip-ip" value="$${ext_ip}"/>
+    <param name="rtp-ip" value="0.0.0.0"/>
+    <param name="ext-rtp-ip" value="$${ext_ip}"/>
+    <param name="context" value="public"/>
+    <param name="dialplan" value="XML"/>
+    <param name="auth-calls" value="true"/>
+    <param name="apply-inbound-acl" value="sbc-trusted"/>
+    <param name="inbound-codec-prefs" value="PCMU,PCMA,G722"/>
+    <param name="outbound-codec-prefs" value="PCMU,PCMA,G722"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+    <param name="rtp-timeout-sec" value="300"/>
+    <param name="rfc2833-pt" value="101"/>
+    <param name="dtmf-type" value="rfc2833"/>
+    <param name="aggressive-nat-detection" value="true"/>
+    <param name="NDLB-force-rport" value="safe"/>
+  </settings>
+</profile>
