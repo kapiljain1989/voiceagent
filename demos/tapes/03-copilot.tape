@@ -1,7 +1,7 @@
 Output demos/gifs/copilot.gif
 Set FontSize 14
 Set Width 1200
-Set Height 600
+Set Height 700
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 50ms
 Set Padding 20
@@ -10,14 +10,10 @@ Type "# Co-Pilot Agent Assist — SIPREC dual-leg observation"
 Enter
 Sleep 1s
 
-Type "# Simulate two-party call with co-pilot coaching"
+Type "cd test && go run simcopilot.go localhost:8080 2>&1; cd .."
 Enter
-Sleep 500ms
+Sleep 30s
 
-Type "cd test && timeout 15 go run simcopilot.go http://localhost:8080 2>&1; cd .."
-Enter
-Sleep 16s
-
-Type "# Live transcript + RAG coaching + post-call summary"
+Type "# Transcript + RAG suggestions + post-call summary"
 Enter
 Sleep 2s

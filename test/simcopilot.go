@@ -13,33 +13,42 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 const (
-	sr       = 16000
-	frameMs  = 20
-	frameSz  = sr * 2 * frameMs / 1000
-	callID   = "test-copilot-001"
+	sr      = 16000
+	frameMs = 20
+	frameSz = sr * 2 * frameMs / 1000
 )
 
 func main() {
 	base := "localhost:8080"
 	if len(os.Args) > 1 {
-		base = os.Args[1]
+		arg := os.Args[1]
+		if u, err := url.Parse(arg); err == nil && u.Host != "" {
+			base = u.Host
+		} else {
+			base = strings.TrimPrefix(strings.TrimPrefix(arg, "http://"), "https://")
+		}
 	}
+
+	callID := fmt.Sprintf("copilot-%d", rand.Intn(900000)+100000)
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║       SIPREC Co-Pilot Test                   ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
-	fmt.Println()
+	fmt.Printf("Call ID: %s\n\n", callID)
 
 	// Subscribe to SSE events in background
-	go subscribeEvents(base)
+	go subscribeEvents(base, callID)
 	time.Sleep(500 * time.Millisecond)
 
 	// Connect caller leg
@@ -64,30 +73,30 @@ func main() {
 
 	fmt.Println("Both legs connected. Simulating conversation...\n")
 
-	// Simulate caller speaking (3s tone)
-	fmt.Println("[Caller speaking for 3 seconds...]")
-	sendTone(callerConn, 1000, 3000)
+	// Simulate caller speaking (2s tone)
+	fmt.Println("[Caller speaking for 2 seconds...]")
+	sendTone(callerConn, 1000, 2000)
 
 	// Silence to trigger VAD flush
-	fmt.Println("[Silence 2s — VAD flush...]")
-	sendSilence(callerConn, 2000)
+	fmt.Println("[Silence 1s — VAD flush...]")
+	sendSilence(callerConn, 1000)
 
 	// Wait for transcription + suggestion
-	time.Sleep(5 * time.Second)
+	time.Sleep(4 * time.Second)
 
 	// Simulate agent speaking (2s tone)
 	fmt.Println("[Agent speaking for 2 seconds...]")
 	sendTone(agentConn, 800, 2000)
-	sendSilence(agentConn, 2000)
+	sendSilence(agentConn, 1000)
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// Simulate another caller utterance
-	fmt.Println("[Caller speaking again for 3 seconds...]")
-	sendTone(callerConn, 1200, 3000)
-	sendSilence(callerConn, 2000)
+	fmt.Println("[Caller speaking again for 2 seconds...]")
+	sendTone(callerConn, 1200, 2000)
+	sendSilence(callerConn, 1000)
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// Hang up — trigger summary
 	fmt.Println("\n[Hanging up — triggering call summary...]")
@@ -96,11 +105,11 @@ func main() {
 	agentConn.WriteMessage(websocket.TextMessage, stop)
 
 	// Wait for summary
-	time.Sleep(10 * time.Second)
+	time.Sleep(8 * time.Second)
 	fmt.Println("\nDone.")
 }
 
-func subscribeEvents(base string) {
+func subscribeEvents(base, callID string) {
 	url := fmt.Sprintf("http://%s/siprec/events?call_id=%s", base, callID)
 
 	// Retry until the session exists

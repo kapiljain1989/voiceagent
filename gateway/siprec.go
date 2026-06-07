@@ -164,6 +164,11 @@ func (gw *gateway) handleSIPREC(w http.ResponseWriter, r *http.Request) {
 
 func (s *siprecSession) readLeg(conn *websocket.Conn, ch chan []byte, role string) {
 	defer conn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Info("readLeg recovered from panic", "role", role, "err", r)
+		}
+	}()
 
 	// Skip initial metadata frame if present
 	mt, raw, err := conn.ReadMessage()
