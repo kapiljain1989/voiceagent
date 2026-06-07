@@ -85,10 +85,10 @@ For normal conversation (no action needed):
 
 RULES:
 - Always include a "text" field with what to speak to the customer
-- Parse dates, times, amounts from natural language ("Thursday at 3" → "2026-06-12T15:00")
-- Detect anger signals: raised voice context, profanity, "let me speak to a manager", repeated complaints
-- Detect complexity: legal terms, regulatory mentions, multi-party disputes
-- Keep spoken responses conversational and brief (1-2 sentences)
+- The "text" field must contain ONLY natural spoken words — no JSON, no field names, no formatting
+- Keep spoken responses to 1 short sentence. Be brief.
+- Parse dates, times, amounts from natural language
+- Detect anger signals: raised voice context, profanity, "let me speak to a manager"
 - Return ONLY valid JSON, nothing else`
 
 // -------------------------------------------------------------------

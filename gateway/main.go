@@ -33,8 +33,8 @@ const (
 
 	// VAD parameters
 	vadRMSThreshold  = 50    // RMS energy above this = speech (tuned for laptop mics)
-	vadSilenceMs     = 500   // ms of silence triggers flush (aggressive — trades accuracy for speed)
-	vadMaxBufferSecs = 5     // cap at 5s to keep Whisper fast
+	vadSilenceMs     = 400   // ms of silence triggers flush
+	vadMaxBufferSecs = 4     // cap at 4s to keep Whisper fast
 	vadFrameMs       = 20    // expected frame duration from FreeSWITCH
 	sampleRate       = 16000 // Hz
 	bytesPerSample   = 2     // 16-bit
@@ -980,8 +980,23 @@ func (s *session) writeToFS(ctx context.Context) {
 			}
 
 			if useESL {
-				s.playViaESL(pcm, seqNum)
-				seqNum++
+				// Collect this chunk + any others already queued
+				batch := [][]byte{pcm}
+			drain:
+				for {
+					select {
+					case more, ok2 := <-s.pcmOut:
+						if !ok2 {
+							break drain
+						}
+						batch = append(batch, more)
+					default:
+						break drain
+					}
+				}
+
+				// Single pause/resume cycle for the entire batch
+				s.playBatchESL(batch, &seqNum)
 			} else {
 				s.playViaWebSocket(ctx, pcm)
 			}
@@ -989,46 +1004,46 @@ func (s *session) writeToFS(ctx context.Context) {
 	}
 }
 
-func (s *session) playViaESL(pcm []byte, seq int) {
-	wavData := buildWAV(pcm, sampleRate, 1, 16)
-	filename := fmt.Sprintf("%s/tts_%s_%d.wav", s.gw.cfg.TTSAudioDir, s.id, seq)
-
-	if err := os.WriteFile(filename, wavData, 0644); err != nil {
-		s.log.Error("write tts wav", "err", err)
-		return
-	}
-
+func (s *session) playBatchESL(batch [][]byte, seqNum *int) {
 	esl := &eslClient{
 		host:     s.gw.cfg.ESLHost,
 		port:     s.gw.cfg.ESLPort,
 		password: s.gw.cfg.ESLPassword,
 	}
 
-	// Block STT from processing frames during playback
+	// Block STT for the entire batch
 	s.playing.Store(true)
-
-	// Pause audio fork capture to prevent feedback loop (TTS heard by Whisper)
 	esl.execute(fmt.Sprintf("uuid_audio_fork %s pause", s.id))
 	time.Sleep(100 * time.Millisecond)
 
-	cmd := fmt.Sprintf("uuid_broadcast %s %s aleg", s.id, filename)
-	resp, err := esl.execute(cmd)
-	if err != nil {
-		s.log.Error("esl broadcast", "err", err)
-		s.playing.Store(false)
+	for _, pcm := range batch {
+		wavData := buildWAV(pcm, sampleRate, 1, 16)
+		filename := fmt.Sprintf("%s/tts_%s_%d.wav", s.gw.cfg.TTSAudioDir, s.id, *seqNum)
+		*seqNum++
+
+		if err := os.WriteFile(filename, wavData, 0644); err != nil {
+			s.log.Error("write tts wav", "err", err)
+			continue
+		}
+
+		cmd := fmt.Sprintf("uuid_broadcast %s %s aleg", s.id, filename)
+		resp, err := esl.execute(cmd)
+		if err != nil {
+			s.log.Error("esl broadcast", "err", err)
+			os.Remove(filename)
+			continue
+		}
+		s.log.Info("playing tts", "file", filename, "resp", strings.TrimSpace(resp))
+
+		durationMs := len(pcm) * 1000 / (sampleRate * bytesPerSample)
+		time.Sleep(time.Duration(durationMs+300) * time.Millisecond)
 		os.Remove(filename)
-		return
 	}
-	s.log.Info("playing tts", "file", filename, "resp", strings.TrimSpace(resp))
 
-	// Wait for playback to finish, then resume capture and clean up
-	durationMs := len(pcm) * 1000 / (sampleRate * bytesPerSample)
-	time.Sleep(time.Duration(durationMs+500) * time.Millisecond)
-
+	// Resume after all sentences played
 	esl.execute(fmt.Sprintf("uuid_audio_fork %s resume", s.id))
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	s.playing.Store(false)
-	os.Remove(filename)
 }
 
 func (s *session) playViaWebSocket(ctx context.Context, pcm []byte) {
