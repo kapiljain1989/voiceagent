@@ -153,6 +153,8 @@ type session struct {
 
 	playing atomic.Bool // true while TTS is being played back — STT discards frames
 
+	voiceSentiment *VoiceSentiment
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	log    *slog.Logger
@@ -344,16 +346,17 @@ func (gw *gateway) handleFS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &session{
-		id:          callID,
-		fsConn:      fsConn,
-		gw:          gw,
-		pcmIn:       make(chan []byte, pcmChanBufSize),
-		transcripts: make(chan string, 4),
-		sentences:   make(chan string, 8),
-		pcmOut:      make(chan []byte, 20),
-		events:      make(chan []byte, 10),
-		cancel:      cancel,
-		log:         log,
+		id:             callID,
+		fsConn:         fsConn,
+		gw:             gw,
+		pcmIn:          make(chan []byte, pcmChanBufSize),
+		transcripts:    make(chan string, 4),
+		sentences:      make(chan string, 8),
+		pcmOut:         make(chan []byte, 20),
+		events:         make(chan []byte, 10),
+		voiceSentiment: NewVoiceSentiment(),
+		cancel:         cancel,
+		log:            log,
 	}
 
 	// If the first frame was audio (no JSON metadata), inject it into the pipeline.
@@ -472,6 +475,9 @@ func (s *session) sttPipeline(ctx context.Context) {
 			if frameCount == warmupFrames+1 {
 				s.log.Info("warmup complete, VAD active", "rms", int(rms))
 			}
+
+			// Feed frames to voice sentiment analyzer
+			s.voiceSentiment.ProcessFrame(pcm)
 
 			// Discard frames during TTS playback to prevent feedback loop
 			if s.playing.Load() {

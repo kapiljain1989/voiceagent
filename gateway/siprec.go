@@ -68,6 +68,8 @@ type siprecSession struct {
 	sseClients map[chan []byte]struct{}
 	sseMu      sync.Mutex
 
+	voiceSentiment *VoiceSentiment
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	log    *slog.Logger
@@ -91,16 +93,17 @@ func getOrCreateSIPRECSession(gw *gateway, callID string) *siprecSession {
 	_ = ctx
 
 	s := &siprecSession{
-		callID:      callID,
-		startTime:   time.Now(),
-		gw:          gw,
-		pcmCaller:   make(chan []byte, pcmChanBufSize),
-		pcmAgent:    make(chan []byte, pcmChanBufSize),
-		transcripts: make(chan *Utterance, 8),
-		suggestions: make(chan *Suggestion, 8),
-		sseClients:  make(map[chan []byte]struct{}),
-		cancel:      cancel,
-		log:         slog.With("call_id", callID, "mode", "copilot"),
+		callID:         callID,
+		startTime:      time.Now(),
+		gw:             gw,
+		pcmCaller:      make(chan []byte, pcmChanBufSize),
+		pcmAgent:       make(chan []byte, pcmChanBufSize),
+		transcripts:    make(chan *Utterance, 8),
+		suggestions:    make(chan *Suggestion, 8),
+		sseClients:     make(map[chan []byte]struct{}),
+		voiceSentiment: NewVoiceSentiment(),
+		cancel:         cancel,
+		log:            slog.With("call_id", callID, "mode", "copilot"),
 	}
 	siprecSessions[callID] = s
 
@@ -265,6 +268,11 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 				continue
 			}
 
+			// Feed every frame to voice sentiment analyzer
+			if speaker == "customer" {
+				s.voiceSentiment.ProcessFrame(pcm)
+			}
+
 			rms := rmsEnergy(pcm)
 
 			if rms > vadRMSThreshold {
@@ -313,6 +321,11 @@ func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speak
 	if isWhisperHallucination(text) {
 		s.log.Debug("filtered hallucination", "text", text, "speaker", speaker)
 		return
+	}
+
+	// Track word count for speaking rate analysis
+	if speaker == "customer" {
+		s.voiceSentiment.AddUtterance(len(strings.Fields(text)))
 	}
 
 	utt := &Utterance{
@@ -579,6 +592,15 @@ func (s *siprecSession) onCallEnd() {
 		}
 	}
 
+	// Voice sentiment analysis (acoustic features from raw audio)
+	voiceSentimentResult := s.voiceSentiment.Analyze()
+
+	// Combine text sentiment (from Claude) with voice sentiment (from audio)
+	finalSentiment := parsed.Sentiment
+	if voiceSentimentResult.Frustration > 0.6 && parsed.Sentiment != "negative" {
+		finalSentiment = "negative"
+	}
+
 	summary := CallSummary{
 		ConversationID: s.callID,
 		Duration:       duration,
@@ -586,7 +608,7 @@ func (s *siprecSession) onCallEnd() {
 		Summary:        parsed.Summary,
 		ActionItems:    parsed.ActionItems,
 		Commitments:    parsed.Commitments,
-		Sentiment:      parsed.Sentiment,
+		Sentiment:      finalSentiment,
 		Suggestions:    suggs,
 	}
 
@@ -594,17 +616,24 @@ func (s *siprecSession) onCallEnd() {
 		"duration", duration,
 		"utterances", len(conv),
 		"suggestions", len(suggs),
-		"sentiment", parsed.Sentiment,
+		"text_sentiment", parsed.Sentiment,
+		"voice_sentiment", voiceSentimentResult.Sentiment,
+		"agitation", fmt.Sprintf("%.2f", voiceSentimentResult.Agitation),
+		"frustration", fmt.Sprintf("%.2f", voiceSentimentResult.Frustration),
+		"avg_pitch", fmt.Sprintf("%.0f", voiceSentimentResult.AvgPitch),
+		"speaking_rate", fmt.Sprintf("%.0f", voiceSentimentResult.SpeakingRate),
+		"final_sentiment", finalSentiment,
 		"summary", parsed.Summary,
 	)
 
 	s.broadcastSSE(map[string]any{
-		"type":         "summary",
-		"summary":      parsed.Summary,
-		"action_items": parsed.ActionItems,
-		"commitments":  parsed.Commitments,
-		"sentiment":    parsed.Sentiment,
-		"duration":     duration,
+		"type":            "summary",
+		"summary":         parsed.Summary,
+		"action_items":    parsed.ActionItems,
+		"commitments":     parsed.Commitments,
+		"sentiment":       finalSentiment,
+		"duration":        duration,
+		"voice_sentiment": voiceSentimentResult,
 	})
 
 	if s.gw.cfg.CRMWebhookURL != "" {
@@ -770,11 +799,16 @@ func (gw *gateway) handleActiveCopilot(w http.ResponseWriter, r *http.Request) {
 	siprecSessionsMu.Lock()
 	sessions := make([]map[string]any, 0, len(siprecSessions))
 	for id, s := range siprecSessions {
-		sessions = append(sessions, map[string]any{
+		entry := map[string]any{
 			"call_id":    id,
 			"started_at": s.startTime,
 			"duration":   int(time.Since(s.startTime).Seconds()),
-		})
+		}
+		if s.voiceSentiment != nil {
+			vs := s.voiceSentiment.Analyze()
+			entry["voice_sentiment"] = vs
+		}
+		sessions = append(sessions, entry)
 	}
 	siprecSessionsMu.Unlock()
 
