@@ -620,12 +620,14 @@ func (s *session) claudeWorker(ctx context.Context) {
 				continue
 			}
 
-			// Parse structured action response
+			// Parse structured action response — extract spoken text from JSON
 			action := ParseAction(full)
 			spokenText := action.Text
 			if spokenText == "" {
-				spokenText = full
+				// If ParseAction couldn't extract text, try to strip JSON manually
+				spokenText = stripJSONToText(full)
 			}
+			s.log.Info("claude raw", "full", full, "parsed_text", spokenText, "action_type", action.Type)
 
 			if action.Type == "api_call" || action.Type == "transfer" {
 				s.log.Info("action detected", "type", action.Type, "intent", action.Intent, "confidence", action.Confidence)
@@ -636,7 +638,8 @@ func (s *session) claudeWorker(ctx context.Context) {
 			s.sendEvent("response", spokenText)
 
 			// Send extracted text to TTS (not raw JSON)
-			for _, sentence := range splitSentences(spokenText) {
+			for i, sentence := range splitSentences(spokenText) {
+				s.log.Info("tts sentence", "seq", i, "text", sentence)
 				select {
 				case s.sentences <- sentence:
 				case <-ctx.Done():
@@ -755,6 +758,35 @@ func sentenceEnd(s string) int {
 		}
 	}
 	return -1
+}
+
+func stripJSONToText(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) == 0 {
+		return s
+	}
+	// Try to extract "text" field from JSON
+	var obj map[string]any
+	if json.Unmarshal([]byte(s), &obj) == nil {
+		if t, ok := obj["text"].(string); ok && t != "" {
+			return t
+		}
+	}
+	// Try embedded JSON
+	if idx := strings.Index(s, `"text"`); idx >= 0 {
+		rest := s[idx+6:]
+		if ci := strings.Index(rest, `"`); ci >= 0 {
+			rest = rest[ci+1:]
+			if ei := strings.Index(rest, `"`); ei >= 0 {
+				return rest[:ei]
+			}
+		}
+	}
+	// If it looks like JSON but we can't parse it, strip non-speech characters
+	if strings.HasPrefix(s, "{") {
+		return ""
+	}
+	return s
 }
 
 func splitSentences(text string) []string {
