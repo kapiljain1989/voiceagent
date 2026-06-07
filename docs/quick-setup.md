@@ -36,7 +36,7 @@ export CLOUD_ML_REGION="us-east5"
 
 ## Option A: Docker Compose (Recommended)
 
-The fastest path. Starts all 7 services with a single command.
+The fastest path. Starts all 10 services with a single command.
 
 ### 1. Clone and Start
 
@@ -55,7 +55,7 @@ docker compose -f docker-compose.sip.yml up -d
 ### 2. Verify Services
 
 ```bash
-# Check all 7 containers are running
+# Check all 10 containers are running
 docker compose -f docker-compose.sip.yml ps
 
 # Health check
@@ -72,18 +72,37 @@ voiceagent-piper-1        Up    :5000
 voiceagent-postgres-1     Up    :5432
 voiceagent-chromadb-1     Up    :8200
 voiceagent-ui-1           Up    :3000
+voiceagent-redis-1        Up    :6379
+voiceagent-prometheus-1   Up    :9090
+voiceagent-grafana-1      Up    :3001
 ```
 
-### 3. Open the Dashboard
+### 3. Login & Get Auth Token
+
+Authentication is enabled by default. All API calls (except `/healthz`, `/metrics`, `/ws`, `/siprec`) require a JWT token.
+
+```bash
+# Login (default credentials: admin / admin)
+TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | jq -r .token)
+
+echo $TOKEN  # Should print a JWT token
+```
+
+### 4. Open the Dashboard
 
 ```
 http://localhost:3000
 ```
 
-### 4. Index Knowledge Base Documents
+Login with `admin` / `admin`.
+
+### 5. Index Knowledge Base Documents
 
 ```bash
 curl -X POST http://localhost:8080/api/documents \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "Insurance Policy",
@@ -92,7 +111,7 @@ curl -X POST http://localhost:8080/api/documents \
   }'
 ```
 
-### 5. Make Your First Call
+### 6. Make Your First Call
 
 **WebSocket voice call (simplest — uses your mic/speaker):**
 ```bash
@@ -159,6 +178,9 @@ kubectl apply -k k8s/overlays/air-gapped
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `AUTH_ENABLED` | `true` | Enable JWT authentication |
+| `JWT_SECRET` | `voiceagent-production-secret` | JWT signing key (change in production) |
+| `REDIS_URL` | `redis://redis:6379/0` | Redis URL for distributed sessions |
 | `CLAUDE_MODEL` | `claude-3-5-haiku@20241022` | LLM model |
 | `CRM_WEBHOOK_URL` | *(empty)* | POST call summaries here |
 | `CRM_WEBHOOK_TOKEN` | *(empty)* | Webhook auth token |
@@ -168,6 +190,13 @@ kubectl apply -k k8s/overlays/air-gapped
 ---
 
 ## Testing Each Feature
+
+> All API calls require `Authorization: Bearer $TOKEN`. Get a token first:
+> ```bash
+> TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
+>   -H 'Content-Type: application/json' \
+>   -d '{"username":"admin","password":"admin"}' | jq -r .token)
+> ```
 
 ### Interactive AI Agent
 ```bash
@@ -181,77 +210,122 @@ cd test && ./callcenter-live.sh
 
 ### Robocall Detection
 ```bash
-curl -X POST http://localhost:8080/api/robocall/test \
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/robocall/test \
   -d '{"text":"Press 1 for your auto warranty"}'
 ```
 
 ### PII Masking
 ```bash
-curl -X POST http://localhost:8080/api/security/pii/test \
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/security/pii/test \
   -d '{"text":"My SSN is 123-45-6789"}'
 ```
 
 ### RAG Search
 ```bash
-curl -X POST http://localhost:8080/api/documents/search \
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/documents/search \
   -d '{"query":"water damage coverage"}'
 ```
 
 ### LLM Test
 ```bash
-curl -X POST http://localhost:8080/api/llm/test \
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/llm/test \
   -d '{"provider":"anthropic-vertex","model":"claude-3-5-haiku@20241022","prompt":"Hello"}'
 ```
 
 ### Failover Status
 ```bash
-curl http://localhost:8080/api/failover/status
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/failover/status
 ```
 
 ### DTMF Parsing
 ```bash
-curl -X POST http://localhost:8080/api/dtmf/test \
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/dtmf/test \
   -d '{"text":"482910"}'
 ```
 
 ### Blocklist
 ```bash
 # Add
-curl -X POST http://localhost:8080/api/blocklist \
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/blocklist \
   -d '{"number":"+15551234567","reason":"spam"}'
 
 # List
-curl http://localhost:8080/api/blocklist
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/blocklist
+```
+
+### SIP Trunk Management
+```bash
+# Add trunk
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/trunks \
+  -d '{"name":"My SBC","address":"sbc.example.com","register":false}'
+
+# List trunks
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/trunks
 ```
 
 ### Self-Service Webhooks
 ```bash
 # Configure
-curl -X POST http://localhost:8080/api/actions/webhooks \
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/actions/webhooks \
   -d '{"reschedule":"https://crm.example.com/api"}'
 
 # View
-curl http://localhost:8080/api/actions/webhooks
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/actions/webhooks
+```
+
+### Prometheus & Grafana
+```bash
+# Raw metrics (no auth required)
+curl http://localhost:8080/metrics
+
+# Prometheus UI
+open http://localhost:9090
+
+# Grafana dashboards
+open http://localhost:3001
 ```
 
 ---
 
 ## SBC Configuration
 
-### Twilio SIP Trunk
+> Full SBC integration guide: [`docs/sbc-configuration.md`](sbc-configuration.md) — covers Cisco CUBE, AudioCodes Mediant, Oracle SBC, Kamailio, and Twilio with SIPREC setup.
+
+### Via API (Recommended)
 ```bash
-SBC_ADDRESS=your-trunk.pstn.twilio.com \
-SBC_REGISTER=true \
-SBC_USERNAME=your-sid \
-SBC_PASSWORD=your-token \
-make sbc-config
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/trunks \
+  -d '{"name":"My SBC","address":"sbc.example.com","register":false}'
 ```
 
-### Cisco CUBE
-Copy `freeswitch/config/sip_profiles/enterprise/cisco-cube.xml` to `sip_profiles/external.xml` and set `SBC_ADDRESS`.
+### Twilio SIP Trunk
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST http://localhost:8080/api/trunks \
+  -d '{
+    "name": "Twilio Production",
+    "address": "your-trunk.pstn.twilio.com",
+    "register": true,
+    "username": "your-trunk-sid",
+    "password": "your-auth-token",
+    "caller_id": "+15559876543"
+  }'
+```
 
-### AudioCodes Mediant
-Copy `freeswitch/config/sip_profiles/enterprise/audiocodes.xml` to `sip_profiles/external.xml` and set `SBC_ADDRESS`.
+### Cisco CUBE / AudioCodes
+Copy the pre-configured profile from `freeswitch/config/sip_profiles/enterprise/` to `sip_profiles/external.xml` and set `SBC_ADDRESS`, or use the trunk API above.
 
 ---
 
@@ -298,3 +372,5 @@ docker compose -f docker-compose.sip.yml down -v
 | SIP call: no audio | RTP port mismatch | Ensure `EXT_IP` matches your LAN IP |
 | Co-pilot: no suggestions | RAG empty | Index documents first via `POST /api/documents` |
 | UI: 404 on pages | Old build | Rebuild UI: `docker compose up -d --build ui` |
+| API: 401 Unauthorized | Missing or expired token | Re-run login to get a fresh `$TOKEN` |
+| UI: "Cannot connect to gateway" | CORS or gateway down | Check gateway is running and `NEXT_PUBLIC_GATEWAY_URL` is set |
