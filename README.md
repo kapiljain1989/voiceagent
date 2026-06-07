@@ -451,6 +451,7 @@ voiceagent/
 | [`docs/quick-setup.md`](docs/quick-setup.md) | 5-minute setup guide — prerequisites, deployment, testing, troubleshooting |
 | [`docs/test-plan.md`](docs/test-plan.md) | Comprehensive test plan — 28 sections, 80+ test cases, load tests, E2E scenarios |
 | [`docs/blog.md`](docs/blog.md) | Technical deep-dive — architecture, protocol handling, enterprise positioning |
+| [`docs/sbc-configuration.md`](docs/sbc-configuration.md) | SBC integration guide — Cisco CUBE, AudioCodes, Oracle, Kamailio, Twilio + SIPREC setup |
 | [`sdk/python/README.md`](sdk/python/README.md) | Python SDK usage guide |
 | [`sdk/typescript/README.md`](sdk/typescript/README.md) | TypeScript SDK usage guide with Next.js examples |
 
