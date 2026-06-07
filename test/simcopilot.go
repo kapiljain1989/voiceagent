@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -30,7 +32,12 @@ const (
 func main() {
 	base := "localhost:8080"
 	if len(os.Args) > 1 {
-		base = os.Args[1]
+		arg := os.Args[1]
+		if u, err := url.Parse(arg); err == nil && u.Host != "" {
+			base = u.Host
+		} else {
+			base = strings.TrimPrefix(strings.TrimPrefix(arg, "http://"), "https://")
+		}
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")

@@ -10,13 +10,13 @@ Type "# Co-Pilot Agent Assist — SIPREC dual-leg observation"
 Enter
 Sleep 1s
 
-Type "# Simulate two-party call with co-pilot coaching"
+Type "# Two-party call: caller + agent legs via WebSocket"
 Enter
 Sleep 500ms
 
-Type "cd test && timeout 15 go run simcopilot.go http://localhost:8080 2>&1; cd .."
+Type "cd test && timeout 25 go run simcopilot.go localhost:8080 2>&1; cd .."
 Enter
-Sleep 16s
+Sleep 26s
 
 Type "# Live transcript + RAG coaching + post-call summary"
 Enter
