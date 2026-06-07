@@ -1,4 +1,4 @@
-FROM kamailio/kamailio:latest
+FROM ghcr.io/kamailio/kamailio-ci:latest
 
 COPY kamailio.cfg /etc/kamailio/kamailio.cfg
 COPY dispatcher.list /etc/kamailio/dispatcher.list

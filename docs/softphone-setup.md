@@ -36,7 +36,7 @@ Your Mac's LAN IP (e.g., `192.168.1.156`) is the SIP server address for all soft
 | Setting | Value |
 |---------|-------|
 | SIP Server | `192.168.x.x` (your Mac's LAN IP) |
-| Port | `5060` |
+| Port | `5080` |
 | Transport | UDP |
 | Username | `customer1` |
 | Password | *(leave empty)* |
@@ -72,7 +72,7 @@ brew install baresip
 # Configure
 mkdir -p ~/.baresip
 cat > ~/.baresip/accounts <<'EOF'
-<sip:agent1@192.168.x.x>;regint=60;transport=udp
+<sip:agent1@192.168.x.x:5080>;regint=60;transport=udp
 EOF
 
 cat > ~/.baresip/config <<'EOF'
@@ -160,7 +160,7 @@ Same as Scenario B, but register a second phone as `agent1` instead of using bar
 | "404 No Route" on dial | Wrong destination number | Use 1xxx, 2xxx, or 3xxx patterns |
 | Laptop baresip doesn't ring | Not registered as `agent1` | Check baresip account config, verify registration |
 | Audio choppy on mobile | WiFi congestion | Move closer to router, disable Bluetooth audio |
-| Kamailio not starting | Port 5060 in use | Check `lsof -i :5060` and stop conflicting process |
+| Kamailio not starting | Port 5080 in use | Check `lsof -i :5080` and stop conflicting process |
 
 ---
 

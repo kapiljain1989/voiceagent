@@ -227,8 +227,8 @@ mesh-status:
 
 sbc-lab:
 	docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml up -d
-	@echo "SBC lab running (11 services). Kamailio SBC at $${EXT_IP}:5060"
-	@echo "Mobile softphone: register to $${EXT_IP}:5060, dial 1000 (AI) or 2000 (co-pilot)"
+	@echo "SBC lab running (11 services). Kamailio SBC at $${EXT_IP}:5080"
+	@echo "Mobile softphone: register to $${EXT_IP}:5080, dial 1000 (AI) or 2000 (co-pilot)"
 
 sbc-lab-down:
 	docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml down

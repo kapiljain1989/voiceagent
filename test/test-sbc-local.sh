@@ -15,7 +15,7 @@
 set -e
 
 EXT_IP=${EXT_IP:-$(ipconfig getifaddr en0 2>/dev/null || hostname -I | awk '{print $1}')}
-SBC_PORT=5060
+SBC_PORT=5080
 GW_PORT=8080
 PASS=0
 FAIL=0
