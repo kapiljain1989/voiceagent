@@ -1,0 +1,12 @@
+apiVersion: telemetry.istio.io/v1
+kind: Telemetry
+metadata:
+  name: voiceagent-telemetry
+  namespace: voiceagent
+spec:
+  metrics:
+    - providers:
+        - name: prometheus
+  accessLogging:
+    - providers:
+        - name: envoy

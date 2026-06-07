@@ -4,11 +4,14 @@ kind: Kustomization
 # Air-gapped deployment — zero internet access
 # All AI models run locally. No Vertex AI dependency.
 # Uses local Ollama for LLM instead of Claude/Gemini.
+# Istio mesh for mTLS, no external ServiceEntries.
 
 namespace: voiceagent
 
 resources:
   - ../../base
+  - ../../istio
+  - ../../gateway-api
 
 patches:
   - target:
@@ -35,3 +38,15 @@ patches:
         value:
           name: OLLAMA_URL
           value: "http://ollama:11434"
+
+  # FreeSWITCH: hostNetwork for air-gapped environments
+  - target:
+      kind: Deployment
+      name: freeswitch
+    patch: |
+      - op: replace
+        path: /spec/template/spec/hostNetwork
+        value: true
+      - op: replace
+        path: /spec/template/spec/dnsPolicy
+        value: ClusterFirstWithHostNet

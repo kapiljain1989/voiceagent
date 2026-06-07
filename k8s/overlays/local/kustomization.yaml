@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: voiceagent
+
+resources:
+  - ../../base
+
+patches:
+  # FreeSWITCH: hostNetwork for KinD (SIP/RTP require direct port binding)
+  - target:
+      kind: Deployment
+      name: freeswitch
+    patch: |
+      - op: replace
+        path: /spec/template/spec/hostNetwork
+        value: true
+      - op: replace
+        path: /spec/template/spec/dnsPolicy
+        value: ClusterFirstWithHostNet
+
+  # All custom images: imagePullPolicy=Never (preloaded via kind load)
+  - target:
+      kind: Deployment
+      name: media-gateway
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+
+  - target:
+      kind: Deployment
+      name: freeswitch
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+
+  - target:
+      kind: Deployment
+      name: ui
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never

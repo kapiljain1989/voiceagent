@@ -2,16 +2,20 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # On-premises deployment overlay
-# Deploys into a restricted enterprise data center with:
-# - No internet access for STT/TTS (local models only)
+# Deploys into an enterprise data center with:
 # - Private SIP trunk to Cisco CUBE / AudioCodes SBC
-# - Internal-only container registry
-# - Persistent storage for call recordings
+# - Istio service mesh with STRICT mTLS
+# - MetalLB for FreeSWITCH LoadBalancer IP
+# - Gateway API for HTTP/WebSocket ingress
 
 namespace: voiceagent
 
 resources:
   - ../../base
+  - ../../istio
+  - ../../gateway-api
+  - metallb-config.yaml
+  - freeswitch-lb-service.yaml
 
 patches:
   - target:
@@ -26,17 +30,19 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: ENABLE_AIRGAP
-          value: "false"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
           name: SBC_PROFILE
           value: "cisco-cube"
+
+  # FreeSWITCH: disable hostNetwork, use MetalLB LoadBalancer
   - target:
       kind: Deployment
       name: freeswitch
     patch: |
+      - op: remove
+        path: /spec/template/spec/hostNetwork
+      - op: replace
+        path: /spec/template/spec/dnsPolicy
+        value: ClusterFirst
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: "1Gi"

@@ -1,0 +1,193 @@
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: voiceagent
+spec:
+  {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-postgres
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: postgres
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+      to:
+        - operation:
+            ports: ["5432"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-redis
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: redis
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+      to:
+        - operation:
+            ports: ["6379"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-chromadb
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: chromadb
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+      to:
+        - operation:
+            ports: ["8000"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-whisper
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: whisper
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+      to:
+        - operation:
+            ports: ["8000"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-piper
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: piper
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+      to:
+        - operation:
+            ports: ["5000"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-gateway
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: media-gateway
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+        - source:
+            namespaces: ["istio-system"]
+      to:
+        - operation:
+            ports: ["8080"]
+    - from:
+        - source:
+            notPrincipals: ["_"]
+      to:
+        - operation:
+            ports: ["8080"]
+            paths: ["/ws", "/siprec*", "/healthz", "/metrics"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-prometheus
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: prometheus
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+        - source:
+            namespaces: ["istio-system"]
+      to:
+        - operation:
+            ports: ["9090"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-grafana
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: grafana
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+        - source:
+            namespaces: ["istio-system"]
+      to:
+        - operation:
+            ports: ["3000"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ui
+  namespace: voiceagent
+spec:
+  selector:
+    matchLabels:
+      app: ui
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/voiceagent/sa/default"
+        - source:
+            namespaces: ["istio-system"]
+      to:
+        - operation:
+            ports: ["3000"]

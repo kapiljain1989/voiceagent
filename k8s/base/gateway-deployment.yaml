@@ -49,6 +49,31 @@ spec:
               value: "ClueCon"
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: "/secrets/gcp/key.json"
+            - name: DATABASE_URL
+              value: "postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.voiceagent.svc.cluster.local:5432/voiceagent?sslmode=disable"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: REDIS_URL
+              value: "redis://redis.voiceagent.svc.cluster.local:6379/0"
+            - name: CHROMA_URL
+              value: "http://chromadb.voiceagent.svc.cluster.local:8000"
+            - name: AUTH_ENABLED
+              value: "true"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: gateway-jwt-secret
+                  key: jwt-secret
+            - name: TTS_AUDIO_DIR
+              value: "/tmp/tts"
           volumeMounts:
             - name: gcp-credentials
               mountPath: /secrets/gcp

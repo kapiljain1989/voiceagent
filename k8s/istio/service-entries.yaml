@@ -1,0 +1,30 @@
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: vertex-ai
+  namespace: voiceagent
+spec:
+  hosts:
+    - "*.googleapis.com"
+  location: MESH_EXTERNAL
+  ports:
+    - number: 443
+      name: https
+      protocol: TLS
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1
+kind: ServiceEntry
+metadata:
+  name: huggingface
+  namespace: voiceagent
+spec:
+  hosts:
+    - "huggingface.co"
+    - "*.huggingface.co"
+  location: MESH_EXTERNAL
+  ports:
+    - number: 443
+      name: https
+      protocol: TLS
+  resolution: DNS

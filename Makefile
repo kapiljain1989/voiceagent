@@ -5,10 +5,16 @@ GW_IMAGE      := voiceagent/gateway:latest
 FS_IMAGE      := voiceagent/freeswitch:latest
 WHISPER_IMAGE := voiceagent/whisper:latest
 PIPER_IMAGE   := waveoffire/piper-tts-server:latest
+UI_IMAGE      := voiceagent/ui:latest
+OVERLAY       ?= local
 
-.PHONY: all kind-up kind-down build load deploy secret sbc-config undeploy logs-gw logs-fs clean
+.PHONY: all kind-up kind-down build build-all load load-all deploy secret sbc-config undeploy \
+        logs-gw logs-fs logs-whisper logs-piper logs-ui logs-postgres logs-redis logs-chromadb \
+        clean status platform-deploy platform-undeploy deploy-local deploy-cloud deploy-on-prem \
+        istio-install istio-uninstall mesh-status freeswitch-ip \
+        port-forward-ui port-forward-grafana port-forward-prometheus
 
-all: kind-up build load secret deploy
+all: kind-up build-all load-all secret deploy-local
 
 ## ─── Cluster lifecycle ───────────────────────────────────────────
 
@@ -19,6 +25,18 @@ kind-up:
 kind-down:
 	kind delete cluster --name $(CLUSTER_NAME)
 
+## ─── Istio lifecycle ─────────────────────────────────────────────
+
+istio-install:
+	istioctl install --set profile=minimal \
+		--set values.pilot.env.PILOT_ENABLE_GATEWAY_API=true \
+		-y
+	@echo "Istio installed with Gateway API support."
+
+istio-uninstall:
+	istioctl uninstall --purge -y
+	kubectl delete namespace istio-system --ignore-not-found
+
 ## ─── Container builds ────────────────────────────────────────────
 
 build:
@@ -27,6 +45,9 @@ build:
 	docker build -t $(WHISPER_IMAGE) whisper/
 	docker pull $(PIPER_IMAGE)
 
+build-all: build
+	docker build -t $(UI_IMAGE) ui/
+
 ## ─── Load images into KinD ───────────────────────────────────────
 
 load:
@@ -34,6 +55,9 @@ load:
 	kind load docker-image $(FS_IMAGE) --name $(CLUSTER_NAME)
 	kind load docker-image $(WHISPER_IMAGE) --name $(CLUSTER_NAME)
 	kind load docker-image $(PIPER_IMAGE) --name $(CLUSTER_NAME)
+
+load-all: load
+	kind load docker-image $(UI_IMAGE) --name $(CLUSTER_NAME)
 
 ## ─── Deploy / tear-down ──────────────────────────────────────────
 
@@ -77,15 +101,70 @@ call:
 		-H 'Content-Type: application/json' \
 		-d "{\"to\":\"$${TO}\",\"from\":\"$${FROM:-0000000000}\"}" | python3 -m json.tool
 
+## ─── Legacy deploy (base only, no Istio) ─────────────────────────
+
 deploy:
 	kubectl apply -k $(KUSTOMIZE_DIR)
+	kubectl -n voiceagent rollout status deployment/postgres --timeout=60s
+	kubectl -n voiceagent rollout status deployment/redis --timeout=30s
+	kubectl -n voiceagent rollout status deployment/chromadb --timeout=60s
 	kubectl -n voiceagent rollout status deployment/whisper --timeout=120s
 	kubectl -n voiceagent rollout status deployment/piper --timeout=120s
 	kubectl -n voiceagent rollout status deployment/media-gateway --timeout=60s
 	kubectl -n voiceagent rollout status deployment/freeswitch --timeout=60s
+	kubectl -n voiceagent rollout status deployment/ui --timeout=60s
+	kubectl -n voiceagent rollout status deployment/prometheus --timeout=30s
+	kubectl -n voiceagent rollout status deployment/grafana --timeout=30s
 
 undeploy:
 	kubectl delete -k $(KUSTOMIZE_DIR) --ignore-not-found
+
+## ─── Platform deploy (Istio + Gateway API + all services) ────────
+
+platform-deploy: secret sbc-config
+	kubectl apply -k k8s/overlays/$(OVERLAY)
+	kubectl -n voiceagent rollout status deployment/postgres --timeout=60s
+	kubectl -n voiceagent rollout status deployment/redis --timeout=30s
+	kubectl -n voiceagent rollout status deployment/chromadb --timeout=60s
+	kubectl -n voiceagent rollout status deployment/whisper --timeout=120s
+	kubectl -n voiceagent rollout status deployment/piper --timeout=120s
+	kubectl -n voiceagent rollout status deployment/media-gateway --timeout=60s
+	kubectl -n voiceagent rollout status deployment/freeswitch --timeout=60s
+	kubectl -n voiceagent rollout status deployment/ui --timeout=60s
+	kubectl -n voiceagent rollout status deployment/prometheus --timeout=30s
+	kubectl -n voiceagent rollout status deployment/grafana --timeout=30s
+
+platform-undeploy:
+	kubectl delete -k k8s/overlays/$(OVERLAY) --ignore-not-found
+
+## ─── Overlay-specific targets ────────────────────────────────────
+
+deploy-local:
+	OVERLAY=local $(MAKE) platform-deploy
+
+deploy-cloud: istio-install
+	OVERLAY=cloud $(MAKE) platform-deploy
+	@echo "Run 'make freeswitch-ip' to configure FreeSWITCH external IP."
+
+deploy-on-prem: istio-install
+	OVERLAY=on-prem $(MAKE) platform-deploy
+	@echo "Run 'make freeswitch-ip' to configure FreeSWITCH external IP."
+
+## ─── FreeSWITCH LB IP discovery (cloud / on-prem) ───────────────
+
+freeswitch-ip:
+	@echo "Waiting for LoadBalancer IP..."
+	@kubectl -n voiceagent wait --for=jsonpath='{.status.loadBalancer.ingress[0].ip}' \
+		service/freeswitch-lb --timeout=120s
+	@FS_IP=$$(kubectl -n voiceagent get svc freeswitch-lb \
+		-o jsonpath='{.status.loadBalancer.ingress[0].ip}'); \
+	echo "FreeSWITCH external IP: $$FS_IP"; \
+	kubectl -n voiceagent create configmap freeswitch-external-ip \
+		--from-literal=external-rtp-ip="$$FS_IP" \
+		--from-literal=external-sip-ip="$$FS_IP" \
+		--dry-run=client -o yaml | kubectl apply -f -; \
+	kubectl -n voiceagent rollout restart deployment/freeswitch
+	@echo "FreeSWITCH restarting with correct external IP."
 
 ## ─── Observability ───────────────────────────────────────────────
 
@@ -101,6 +180,27 @@ logs-whisper:
 logs-piper:
 	kubectl -n voiceagent logs -f deployment/piper
 
+logs-ui:
+	kubectl -n voiceagent logs -f deployment/ui
+
+logs-postgres:
+	kubectl -n voiceagent logs -f deployment/postgres
+
+logs-redis:
+	kubectl -n voiceagent logs -f deployment/redis
+
+logs-chromadb:
+	kubectl -n voiceagent logs -f deployment/chromadb
+
+port-forward-ui:
+	kubectl -n voiceagent port-forward svc/ui 3000:3000
+
+port-forward-grafana:
+	kubectl -n voiceagent port-forward svc/grafana 3001:3000
+
+port-forward-prometheus:
+	kubectl -n voiceagent port-forward svc/prometheus 9090:9090
+
 status:
 	@echo "=== Pods ==="
 	@kubectl -n voiceagent get pods -o wide
@@ -112,7 +212,16 @@ status:
 	@kubectl -n voiceagent exec deployment/media-gateway -- \
 		wget -q -O- http://localhost:8080/healthz 2>/dev/null || true
 
+## ─── Mesh status ─────────────────────────────────────────────────
+
+mesh-status:
+	@echo "=== Istio Proxy Status ==="
+	@istioctl proxy-status -n voiceagent
+	@echo ""
+	@echo "=== mTLS Status ==="
+	@istioctl authn tls-check -n voiceagent
+
 ## ─── Housekeeping ────────────────────────────────────────────────
 
 clean: undeploy kind-down
-	docker rmi $(GW_IMAGE) $(FS_IMAGE) $(WHISPER_IMAGE) 2>/dev/null || true
+	docker rmi $(GW_IMAGE) $(FS_IMAGE) $(WHISPER_IMAGE) $(UI_IMAGE) 2>/dev/null || true

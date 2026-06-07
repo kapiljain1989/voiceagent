@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: freeswitch-lb
+  namespace: voiceagent
+  annotations:
+    cloud.google.com/l4-rbs: "enabled"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app: freeswitch
+  ports:
+    - name: sip-udp
+      port: 5060
+      targetPort: 5060
+      protocol: UDP
+    - name: sip-tcp
+      port: 5060
+      targetPort: 5060
+      protocol: TCP
+    - name: rtp-16000
+      port: 16000
+      targetPort: 16000
+      protocol: UDP
+    - name: rtp-16001
+      port: 16001
+      targetPort: 16001
+      protocol: UDP
+    - name: rtp-16002
+      port: 16002
+      targetPort: 16002
+      protocol: UDP
+    - name: rtp-16003
+      port: 16003
+      targetPort: 16003
+      protocol: UDP
+    - name: rtp-16004
+      port: 16004
+      targetPort: 16004
+      protocol: UDP
+    - name: rtp-16005
+      port: 16005
+      targetPort: 16005
+      protocol: UDP
+    - name: rtp-16006
+      port: 16006
+      targetPort: 16006
+      protocol: UDP
+    - name: rtp-16007
+      port: 16007
+      targetPort: 16007
+      protocol: UDP
+    - name: rtp-16008
+      port: 16008
+      targetPort: 16008
+      protocol: UDP
+    - name: rtp-16009
+      port: 16009
+      targetPort: 16009
+      protocol: UDP
+    - name: rtp-16010
+      port: 16010
+      targetPort: 16010
+      protocol: UDP
+    - name: rtp-16011
+      port: 16011
+      targetPort: 16011
+      protocol: UDP
+    - name: rtp-16012
+      port: 16012
+      targetPort: 16012
+      protocol: UDP
+    - name: rtp-16013
+      port: 16013
+      targetPort: 16013
+      protocol: UDP
+    - name: rtp-16014
+      port: 16014
+      targetPort: 16014
+      protocol: UDP
+    - name: rtp-16015
+      port: 16015
+      targetPort: 16015
+      protocol: UDP
+    - name: rtp-16016
+      port: 16016
+      targetPort: 16016
+      protocol: UDP
+    - name: rtp-16017
+      port: 16017
+      targetPort: 16017
+      protocol: UDP
+    - name: rtp-16018
+      port: 16018
+      targetPort: 16018
+      protocol: UDP
+    - name: rtp-16019
+      port: 16019
+      targetPort: 16019
+      protocol: UDP
+    - name: rtp-16020
+      port: 16020
+      targetPort: 16020
+      protocol: UDP

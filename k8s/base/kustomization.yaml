@@ -5,12 +5,41 @@ namespace: voiceagent
 
 resources:
   - namespace.yaml
+  # Gateway
   - gateway-deployment.yaml
   - gateway-service.yaml
+  # FreeSWITCH
   - freeswitch-deployment.yaml
   - freeswitch-service.yaml
+  # STT / TTS
   - whisper-deployment.yaml
   - whisper-service.yaml
   - piper-deployment.yaml
   - piper-service.yaml
+  # Data stores
+  - postgres-deployment.yaml
+  - postgres-service.yaml
+  - postgres-pvc.yaml
+  - postgres-secret.yaml
+  - redis-deployment.yaml
+  - redis-service.yaml
+  - chromadb-deployment.yaml
+  - chromadb-service.yaml
+  - chromadb-pvc.yaml
+  # UI
+  - ui-deployment.yaml
+  - ui-service.yaml
+  # Observability
+  - prometheus-deployment.yaml
+  - prometheus-service.yaml
+  - prometheus-configmap.yaml
+  - prometheus-pvc.yaml
+  - grafana-deployment.yaml
+  - grafana-service.yaml
+  - grafana-pvc.yaml
+  - grafana-secret.yaml
+  # Configuration
   - sbc-configmap.yaml
+  - gateway-jwt-secret.yaml
+  # Network policies
+  - network-policies.yaml
