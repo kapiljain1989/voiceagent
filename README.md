@@ -456,34 +456,4 @@ voiceagent/
 
 ---
 
-## Test Results
-
-**61 tests executed across 19 sections — 95% pass rate.**
-
-| Category | Tests | Pass | Status |
-|----------|:-----:|:----:|--------|
-| Service Health (10 services) | 11 | 11 | All healthy |
-| Interactive AI Agent | 2 | 2 | Pipeline verified |
-| Self-Service Actions | 4 | 4 | All action types parse |
-| Robocall Detection | 6 | 6 | Keywords, blocklist, stats |
-| Voice Biometrics | 3 | 3 | Enroll + list |
-| PII Masking (7 patterns) | 6 | 6 | CC, SSN, CVV, DOB, account |
-| RAG Knowledge Base | 4 | 3 | Search + index working |
-| Multi-LLM (Claude) | 3 | 2 | Claude responds, configs persist |
-| DTMF Parsing | 2 | 2 | Digits + special chars |
-| Failover State Machine | 1 | 1 | All circuits closed |
-| SBC Connectivity | 2 | 2 | SIP 200 OK |
-| Rate Limiting | 1 | 1 | Admission controller OK |
-| Redis Session Store | 1 | 1 | PONG |
-| Prometheus Metrics | 3 | 3 | Scraping + query |
-| Agent CRUD | 2 | 2 | Create + list |
-| Call History | 3 | 3 | All endpoints 200 |
-| Dashboard UI (6 pages) | 6 | 6 | All render |
-| Load Tests (30 concurrent) | 4 | 4 | Zero errors |
-| Deployment Modes | 3 | 3 | Compose + overlays |
-
-Full test plan: [`docs/test-plan.md`](docs/test-plan.md)
-
----
-
 *Built for network engineers who ship infrastructure, not web developers who ship wrappers.*
