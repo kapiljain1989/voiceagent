@@ -61,12 +61,20 @@ type Config struct {
 	DBURL           string
 	ChromaURL       string
 	SIPListenAddr   string
+	Mode            string // "standalone" = SIPREC helper (no FS), "gateway" = full B2BUA with FreeSWITCH
 }
 
 func loadConfig() Config {
+	mode := envOr("VOICEAGENT_MODE", "gateway")
+	sipAddr := envOr("SIP_LISTEN_ADDR", "")
+	if mode == "standalone" && sipAddr == "" {
+		sipAddr = ":5060"
+	}
+
 	return Config{
+		Mode:         mode,
 		ListenAddr:   envOr("LISTEN_ADDR", ":8080"),
-		SIPListenAddr: envOr("SIP_LISTEN_ADDR", ""),
+		SIPListenAddr: sipAddr,
 		STTURL:       envOr("STT_URL", "http://whisper:8000/v1/audio/transcriptions"),
 		TTSURL:       envOr("TTS_URL", "http://piper:5000"),
 		GCPProjectID: envOr("GCP_PROJECT_ID", os.Getenv("ANTHROPIC_VERTEX_PROJECT_ID")),
@@ -246,7 +254,17 @@ func main() {
 	mux.HandleFunc("/api/copilot/active", gw.handleActiveCopilot)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok","sessions":%d}`, gw.sessions.Load())
+		fmt.Fprintf(w, `{"status":"ok","sessions":%d,"mode":"%s"}`, gw.sessions.Load(), cfg.Mode)
+	})
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"mode":           cfg.Mode,
+			"sip_listen":     cfg.SIPListenAddr,
+			"stt_url":        cfg.STTURL,
+			"tts_url":        cfg.TTSURL,
+			"claude_model":   cfg.ClaudeModel,
+		})
 	})
 
 	auth := NewAuthHandler(api.db, envOr("JWT_SECRET", ""))
@@ -271,14 +289,14 @@ func main() {
 	failover.StartHealthMonitor(sigCtx)
 
 	go func() {
-		slog.Info("gateway listening", "addr", cfg.ListenAddr, "stt", cfg.STTURL, "tts", cfg.TTSURL)
+		slog.Info("gateway listening", "addr", cfg.ListenAddr, "mode", cfg.Mode, "stt", cfg.STTURL)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("listen", "err", err)
 			os.Exit(1)
 		}
 	}()
 
-	// Start native SIP server for direct SIPREC (no FreeSWITCH needed)
+	// Start native SIP server for direct SIPREC
 	if cfg.SIPListenAddr != "" {
 		sipSrv, err := NewSIPServer(gw, cfg.SIPListenAddr)
 		if err != nil {
@@ -288,6 +306,14 @@ func main() {
 				slog.Error("sip server start", "err", err)
 			}
 		}
+	}
+
+	if cfg.Mode == "standalone" {
+		slog.Info("standalone helper mode — SBC points SIPREC to this IP",
+			"sip", cfg.SIPListenAddr, "http", cfg.ListenAddr)
+	} else {
+		slog.Info("gateway mode — FreeSWITCH forwards audio via WebSocket",
+			"esl", cfg.ESLHost+":"+cfg.ESLPort)
 	}
 
 	<-sigCtx.Done()

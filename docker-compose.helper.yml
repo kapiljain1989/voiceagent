@@ -22,7 +22,7 @@ services:
       - "30000-30050:30000-30050/udp"
     environment:
       - LISTEN_ADDR=:8080
-      - SIP_LISTEN_ADDR=:5060
+      - VOICEAGENT_MODE=standalone
       - STT_URL=http://whisper:8000/v1/audio/transcriptions
       - GCP_PROJECT_ID=${GCP_PROJECT_ID:-${ANTHROPIC_VERTEX_PROJECT_ID}}
       - GCP_REGION=${GCP_REGION:-${CLOUD_ML_REGION:-us-east5}}
