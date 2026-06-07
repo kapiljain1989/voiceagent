@@ -3,57 +3,33 @@ Set FontSize 14
 Set Width 1200
 Set Height 600
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 40ms
+Set TypingSpeed 50ms
 Set Padding 20
 
-Type "# Python SDK — 25+ API endpoints"
+Type "# VoiceAgent API — 25+ endpoints"
 Enter
 Sleep 1s
 
-Type 'python3 -c "'
+Type "demos/run-demo.sh healthz"
 Enter
+Sleep 2s
 
-Type "from voiceagent import VoiceAgentClient"
+Type "demos/run-demo.sh stats"
 Enter
-Type "client = VoiceAgentClient('http://localhost:8080')"
-Enter
-Type "client.login('admin', 'admin')"
-Enter
-Sleep 500ms
+Sleep 2s
 
-Type "# Health check"
+Type "demos/run-demo.sh agents"
 Enter
-Type "print('Health:', client.health())"
-Enter
-Sleep 1s
+Sleep 2s
 
-Type "# PII masking"
+Type "demos/run-demo.sh failover"
 Enter
-Type "pii = client.test_pii('My SSN is 123-45-6789')"
-Enter
-Type "print('Masked:', pii['masked'])"
-Enter
-Sleep 1s
+Sleep 2s
 
-Type "# Robocall detection"
+Type "demos/run-demo.sh dtmf-test '482910'"
 Enter
-Type "robo = client.test_robocall('Press 1 for warranty')"
-Enter
-Type "print('Score:', robo['keyword']['score'])"
-Enter
-Sleep 1s
+Sleep 2s
 
-Type "# RAG search"
-Enter
-Type "results = client.rag_search('water damage')"
-Enter
-Type "print('Results:', len(results))"
-Enter
-
-Type '"'
-Enter
-Sleep 4s
-
-Type "# Python + TypeScript SDKs available"
+Type "demos/run-demo.sh scale"
 Enter
 Sleep 2s
