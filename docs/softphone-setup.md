@@ -109,7 +109,7 @@ audio_channels 1
 EOF
 
 # Start (replace IP)
-baresip
+c
 # Type: /dial 1000   ← calls AI agent
 # Type: /accept      ← answer incoming call from customer
 ```
