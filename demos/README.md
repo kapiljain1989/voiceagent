@@ -14,6 +14,9 @@ Automated terminal recordings via [VHS](https://github.com/charmbracelet/vhs). E
 | 6 | RAG Knowledge Base — upload + search | [06-rag.tape](tapes/06-rag.tape) | ~20s |
 | 7 | K8s Deploy — Istio + Gateway API | [07-k8s-deploy.tape](tapes/07-k8s-deploy.tape) | ~20s |
 | 8 | API & SDK — Python SDK demo | [08-api-sdk.tape](tapes/08-api-sdk.tape) | ~25s |
+| 9 | Standalone Helper — SIPREC, no FreeSWITCH | [09-standalone-helper.tape](tapes/09-standalone-helper.tape) | ~20s |
+| 10 | Voice Sentiment — acoustic emotion | [10-voice-sentiment.tape](tapes/10-voice-sentiment.tape) | ~20s |
+| 11 | SBC Lab — Kamailio + mobile softphone | [11-sbc-lab.tape](tapes/11-sbc-lab.tape) | ~20s |
 
 ### Generate GIFs
 
@@ -34,6 +37,9 @@ Step-by-step recording guides with terminal commands, browser actions, and narra
 | 12 | Infrastructure | [12-infrastructure.md](scripts/12-infrastructure.md) | ~2 min |
 | 13 | K8s + Istio | [13-k8s-istio.md](scripts/13-k8s-istio.md) | ~3 min |
 | 14 | SBC Integration | [14-sbc-integration.md](scripts/14-sbc-integration.md) | ~2.5 min |
+| 15 | Standalone Helper Mode | [15-standalone-helper.md](scripts/15-standalone-helper.md) | ~2.5 min |
+| 16 | Voice Sentiment Analysis | [16-voice-sentiment.md](scripts/16-voice-sentiment.md) | ~2 min |
+| 17 | SBC Lab + Mobile Softphone | [17-sbc-lab.md](scripts/17-sbc-lab.md) | ~3 min |
 
 ### Recording Tips
 

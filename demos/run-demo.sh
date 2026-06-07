@@ -85,6 +85,41 @@ case "$1" in
   k8s-pods)
     kubectl -n voiceagent get pods -o wide 2>/dev/null || echo "No K8s cluster running"
     ;;
+  config)
+    curl -s http://localhost:8080/api/config | python3 -m json.tool
+    ;;
+  copilot-active)
+    curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/copilot/active | python3 -c "
+import sys,json
+sessions = json.load(sys.stdin)
+if not sessions:
+    print('No active copilot sessions')
+else:
+    for s in sessions:
+        vs = s.get('voice_sentiment', {})
+        caller = s.get('caller', s['call_id'][:12])
+        agent = s.get('agent', 'unknown')
+        print(f'  {caller} -> {agent}  ({s[\"duration\"]}s)')
+        if vs:
+            print(f'    Agitation: {vs.get(\"agitation\",0):.0%}  Frustration: {vs.get(\"frustration\",0):.0%}  Engagement: {vs.get(\"engagement\",0):.0%}')
+            print(f'    Pitch: {vs.get(\"avg_pitch_hz\",0):.0f}Hz  Speed: {vs.get(\"speaking_rate_wpm\",0):.0f}wpm  Energy: {vs.get(\"energy_trend\",\"stable\")}')
+"
+    ;;
+  helper-services)
+    docker compose -f docker-compose.helper.yml ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null
+    ;;
+  sbc-lab-services)
+    docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml ps --format 'table {{.Name}}\t{{.Status}}' 2>/dev/null
+    ;;
+  sip-options)
+    python3 -c "
+import socket, time
+msg='OPTIONS sip:test@127.0.0.1:${2:-5061} SIP/2.0\r\nVia: SIP/2.0/TCP 127.0.0.1:15060;branch=z9hG4bK-demo\r\nMax-Forwards: 70\r\nFrom: <sip:test@127.0.0.1>;tag=d1\r\nTo: <sip:test@127.0.0.1>\r\nCall-ID: demo-001\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n'
+s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(5)
+s.connect(('127.0.0.1', ${2:-5061})); s.send(msg.encode()); time.sleep(1)
+print(s.recv(4096).decode().split('\r\n')[0]); s.close()
+"
+    ;;
   *)
     echo "Unknown demo: $1"
     exit 1
