@@ -36,4 +36,4 @@ services:
       - EXTERNAL_SIP_IP=${EXT_IP}
     volumes:
       - ./freeswitch/config/sip_profiles/softphone.xml:/usr/local/freeswitch/conf/sip_profiles/softphone.xml:ro
-      - ./freeswitch/config/directory/softphone-users.xml:/usr/local/freeswitch/conf/directory/default/softphone-users.xml:ro
+      - ./freeswitch/config/directory/softphone-domain.xml:/usr/local/freeswitch/conf/directory/softphone-domain.xml:ro

@@ -11,7 +11,10 @@
     <param name="ext-rtp-ip" value="$${ext_ip}"/>
     <param name="context" value="public"/>
     <param name="dialplan" value="XML"/>
-    <param name="auth-calls" value="true"/>
+    <!-- Accept any registration without auth for local lab -->
+    <param name="accept-blind-reg" value="true"/>
+    <param name="accept-blind-auth" value="true"/>
+    <param name="auth-calls" value="false"/>
     <param name="apply-inbound-acl" value="sbc-trusted"/>
     <param name="inbound-codec-prefs" value="PCMU,PCMA,G722"/>
     <param name="outbound-codec-prefs" value="PCMU,PCMA,G722"/>

@@ -1,0 +1,37 @@
+<include>
+  <domain name="$${local_ip_v4}">
+    <params>
+      <param name="dial-string" value="{presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(${dialed_user}@${dialed_domain})}"/>
+    </params>
+    <groups>
+      <group name="softphones">
+        <users>
+          <user id="customer1">
+            <params>
+              <param name="password" value="1234"/>
+            </params>
+            <variables>
+              <variable name="user_context" value="public"/>
+            </variables>
+          </user>
+          <user id="customer2">
+            <params>
+              <param name="password" value="1234"/>
+            </params>
+            <variables>
+              <variable name="user_context" value="public"/>
+            </variables>
+          </user>
+          <user id="agent1">
+            <params>
+              <param name="password" value="1234"/>
+            </params>
+            <variables>
+              <variable name="user_context" value="public"/>
+            </variables>
+          </user>
+        </users>
+      </group>
+    </groups>
+  </domain>
+</include>
