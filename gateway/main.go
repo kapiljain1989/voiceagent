@@ -149,6 +149,8 @@ type session struct {
 	history []claudeMessage
 	histMu  sync.Mutex
 
+	playing atomic.Bool // true while TTS is being played back — STT discards frames
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	log    *slog.Logger
@@ -454,6 +456,16 @@ func (s *session) sttPipeline(ctx context.Context) {
 			}
 			if frameCount == warmupFrames+1 {
 				s.log.Info("warmup complete, VAD active", "rms", int(rms))
+			}
+
+			// Discard frames during TTS playback to prevent feedback loop
+			if s.playing.Load() {
+				if speechActive {
+					audioBuf = audioBuf[:0]
+					speechActive = false
+					silentFrames = 0
+				}
+				continue
 			}
 
 			if !speechActive && rms > vadRMSThreshold {
@@ -853,13 +865,18 @@ func (s *session) playViaESL(pcm []byte, seq int) {
 		password: s.gw.cfg.ESLPassword,
 	}
 
+	// Block STT from processing frames during playback
+	s.playing.Store(true)
+
 	// Pause audio fork capture to prevent feedback loop (TTS heard by Whisper)
 	esl.execute(fmt.Sprintf("uuid_audio_fork %s pause", s.id))
+	time.Sleep(100 * time.Millisecond)
 
 	cmd := fmt.Sprintf("uuid_broadcast %s %s aleg", s.id, filename)
 	resp, err := esl.execute(cmd)
 	if err != nil {
 		s.log.Error("esl broadcast", "err", err)
+		s.playing.Store(false)
 		os.Remove(filename)
 		return
 	}
@@ -870,6 +887,8 @@ func (s *session) playViaESL(pcm []byte, seq int) {
 	time.Sleep(time.Duration(durationMs+500) * time.Millisecond)
 
 	esl.execute(fmt.Sprintf("uuid_audio_fork %s resume", s.id))
+	time.Sleep(200 * time.Millisecond)
+	s.playing.Store(false)
 	os.Remove(filename)
 }
 
