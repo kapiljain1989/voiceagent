@@ -1128,11 +1128,36 @@ func isWhisperHallucination(text string) bool {
 	}
 
 	// Repetition patterns: "Thank you. Thank you. Thank you."
-	repeats := []string{"thank you", "all right", "alright", "okay", "good"}
+	repeats := []string{
+		"thank you", "all right", "alright", "okay", "good",
+		"yeah", "yes", "no", "day", "i'm sorry", "sorry",
+		"we'll be right back", "we're", "you're here",
+		"ladies and gentlemen",
+	}
 	for _, h := range repeats {
 		if strings.Count(lower, h) >= 3 {
 			return true
 		}
+	}
+
+	// Generic repetition: any word/phrase repeated 5+ times is hallucination
+	words := strings.Fields(cleaned)
+	if len(words) >= 5 {
+		counts := make(map[string]int)
+		for _, w := range words {
+			counts[w]++
+		}
+		for _, c := range counts {
+			if c >= 5 && float64(c)/float64(len(words)) > 0.5 {
+				return true
+			}
+		}
+	}
+
+	// Dots/ellipsis only
+	dotsOnly := strings.ReplaceAll(strings.ReplaceAll(cleaned, " ", ""), ".", "")
+	if len(dotsOnly) == 0 && len(cleaned) > 0 {
+		return true
 	}
 
 	return false

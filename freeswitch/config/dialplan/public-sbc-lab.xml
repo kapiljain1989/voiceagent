@@ -1,15 +1,13 @@
 <include>
   <context name="public">
 
-    <!-- 2xxx: Co-Pilot bridge — ring agent1 + SIPREC fork both legs -->
+    <!-- 2xxx: Co-Pilot bridge — ring agent1 + SIPREC fork caller leg -->
     <extension name="copilot_bridge">
       <condition field="destination_number" expression="^(2[0-9]{3})$">
         <action application="answer"/>
-        <!-- Set RECORD_STEREO so audio_fork captures both sides after bridge -->
-        <action application="set" data="RECORD_STEREO=true"/>
-        <!-- Fork A-leg audio to gateway — after bridge, captures both caller+agent mixed -->
+        <!-- Fork caller (A-leg) audio to gateway copilot -->
         <action application="set" data="res=${uuid_audio_fork ${uuid} start ws://gateway:8080/siprec?role=caller&amp;call_id=${uuid} mono 16000}"/>
-        <!-- Bridge to agent -->
+        <!-- Bridge to agent — copilot observes caller side -->
         <action application="bridge" data="sofia/softphone/agent1%$${ext_ip}"/>
       </condition>
     </extension>
