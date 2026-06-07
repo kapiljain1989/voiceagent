@@ -34,5 +34,10 @@ chromadata/
 .vscode/
 .idea/
 
+# Generated demo assets
+demos/gifs/*.gif
+demos/gifs/*.mp4
+demos/gifs/*.webm
+
 # Claude
 .claude/

@@ -12,7 +12,8 @@ OVERLAY       ?= local
         logs-gw logs-fs logs-whisper logs-piper logs-ui logs-postgres logs-redis logs-chromadb \
         clean status platform-deploy platform-undeploy deploy-local deploy-cloud deploy-on-prem \
         istio-install istio-uninstall mesh-status freeswitch-ip \
-        port-forward-ui port-forward-grafana port-forward-prometheus
+        port-forward-ui port-forward-grafana port-forward-prometheus \
+        demos demos-gifs demos-clean
 
 all: kind-up build-all load-all secret deploy-local
 
@@ -220,6 +221,20 @@ mesh-status:
 	@echo ""
 	@echo "=== mTLS Status ==="
 	@istioctl authn tls-check -n voiceagent
+
+## ─── Demo recordings ─────────────────────────────────────────────
+
+demos: demos-gifs
+
+demos-gifs:
+	@for tape in demos/tapes/*.tape; do \
+		echo "Recording $$tape..."; \
+		vhs "$$tape"; \
+	done
+	@echo "All GIFs generated in demos/gifs/"
+
+demos-clean:
+	rm -f demos/gifs/*.gif demos/gifs/*.mp4 demos/gifs/*.webm
 
 ## ─── Housekeeping ────────────────────────────────────────────────
 
