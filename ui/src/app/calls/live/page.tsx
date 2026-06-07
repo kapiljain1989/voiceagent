@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { authFetch } from "@/lib/auth";
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
 
@@ -116,9 +117,8 @@ export default function LiveOpsPage() {
   async function handleDial() {
     if (!dialNumber) return;
     try {
-      const res = await fetch(`${GATEWAY}/call`, {
+      const res = await authFetch("/call", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to: dialNumber, mode: "loopback" }),
       });
       const data = await res.json();

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { authFetch } from "@/lib/auth";
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
 
@@ -23,18 +24,18 @@ export default function InfrastructurePage() {
   const [metrics, setMetrics] = useState("");
 
   async function loadFailover() {
-    const res = await fetch(`${GATEWAY}/api/failover/status`);
+    const res = await authFetch("/api/failover/status");
     setFailover(await res.json());
   }
 
   async function loadScale() {
-    const res = await fetch(`${GATEWAY}/api/scale/status`);
+    const res = await authFetch("/api/scale/status");
     setScale(await res.json());
   }
 
   async function testDTMF() {
-    const res = await fetch(`${GATEWAY}/api/dtmf/test`, {
-      method: "POST", headers: {"Content-Type":"application/json"},
+    const res = await authFetch("/api/dtmf/test", {
+      method: "POST",
       body: JSON.stringify({text: dtmfDigits}),
     });
     setDtmfResult(await res.json());

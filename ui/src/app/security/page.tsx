@@ -6,8 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
-const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
+import { authFetch } from "@/lib/auth";
 
 export default function SecurityPage() {
   // Robocall state
@@ -29,13 +28,13 @@ export default function SecurityPage() {
   const [vpType, setVpType] = useState("fraud");
 
   async function loadBlocklist() {
-    const res = await fetch(`${GATEWAY}/api/blocklist`);
+    const res = await authFetch("/api/blocklist");
     setBlocklist(await res.json());
   }
 
   async function addToBlocklist() {
-    await fetch(`${GATEWAY}/api/blocklist`, {
-      method: "POST", headers: {"Content-Type":"application/json"},
+    await authFetch("/api/blocklist", {
+      method: "POST",
       body: JSON.stringify({number: blockNumber, reason: blockReason}),
     });
     setBlockNumber(""); setBlockReason("");
@@ -43,29 +42,29 @@ export default function SecurityPage() {
   }
 
   async function removeFromBlocklist(number: string) {
-    await fetch(`${GATEWAY}/api/blocklist`, {
-      method: "DELETE", headers: {"Content-Type":"application/json"},
+    await authFetch("/api/blocklist", {
+      method: "DELETE",
       body: JSON.stringify({number}),
     });
     loadBlocklist();
   }
 
   async function testRobocall() {
-    const res = await fetch(`${GATEWAY}/api/robocall/test`, {
-      method: "POST", headers: {"Content-Type":"application/json"},
+    const res = await authFetch("/api/robocall/test", {
+      method: "POST",
       body: JSON.stringify({text: robocallText}),
     });
     setRobocallResult(await res.json());
   }
 
   async function loadRobocallStats() {
-    const res = await fetch(`${GATEWAY}/api/robocall/stats`);
+    const res = await authFetch("/api/robocall/stats");
     setRobocallStats(await res.json());
   }
 
   async function testPII() {
-    const res = await fetch(`${GATEWAY}/api/security/pii/test`, {
-      method: "POST", headers: {"Content-Type":"application/json"},
+    const res = await authFetch("/api/security/pii/test", {
+      method: "POST",
       body: JSON.stringify({text: piiText}),
     });
     setPiiResult(await res.json());
@@ -73,21 +72,21 @@ export default function SecurityPage() {
 
   async function togglePII() {
     const newState = !piiEnabled;
-    await fetch(`${GATEWAY}/api/security/pii/config`, {
-      method: "POST", headers: {"Content-Type":"application/json"},
+    await authFetch("/api/security/pii/config", {
+      method: "POST",
       body: JSON.stringify({enabled: newState}),
     });
     setPiiEnabled(newState);
   }
 
   async function loadVoiceprints() {
-    const res = await fetch(`${GATEWAY}/api/security/voiceprints`);
+    const res = await authFetch("/api/security/voiceprints");
     setVoiceprints(await res.json());
   }
 
   async function enrollVoiceprint() {
-    await fetch(`${GATEWAY}/api/security/voiceprints`, {
-      method: "POST", headers: {"Content-Type":"application/json"},
+    await authFetch("/api/security/voiceprints", {
+      method: "POST",
       body: JSON.stringify({label: vpLabel, type: vpType}),
     });
     setVpLabel("");
