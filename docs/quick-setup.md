@@ -135,31 +135,82 @@ cd test && ./callcenter-live.sh
 
 ---
 
-## Option B: KinD Cluster (Kubernetes)
+## Option B: Kubernetes (Istio + Gateway API)
 
-For testing the Kustomize deployment locally.
+All 10 services deploy to K8s with Istio service mesh (STRICT mTLS) and Gateway API for HTTP/WebSocket ingress. Four overlays are available:
+
+| Overlay | FreeSWITCH Networking | Istio | Use Case |
+|---------|----------------------|-------|----------|
+| `local` | hostNetwork | No | KinD local dev |
+| `cloud` | LoadBalancer | Yes | GKE / EKS / AKS |
+| `on-prem` | MetalLB L2 | Yes | Bare metal data center |
+| `air-gapped` | hostNetwork | Yes | Zero internet (local Ollama) |
+
+### Prerequisites (K8s)
 
 ```bash
-# Deploy everything
+brew install kind kubectl istioctl
+```
+
+### Local KinD Cluster
+
+```bash
+# Build all images, create cluster, deploy 10 services
 make all
 
-# Port-forward the gateway
-kubectl -n voiceagent port-forward deployment/media-gateway 8080:8080 &
+# Port-forward for local access
+make port-forward-ui &          # http://localhost:3000
+kubectl -n voiceagent port-forward svc/media-gateway 8080:8080 &
 
-# Test
-cd test && ./livecall ws://localhost:8080/ws
+# Verify
+curl http://localhost:8080/healthz
+kubectl -n voiceagent get pods   # All 10 pods Running
 ```
 
-### On-Premises Deployment
+### Cloud Deployment (GKE / EKS / AKS)
 
 ```bash
-kubectl apply -k k8s/overlays/on-prem
+# Install Istio + deploy all services with Gateway API
+make deploy-cloud
+
+# Discover FreeSWITCH LoadBalancer IP and configure SDP
+make freeswitch-ip
+
+# Verify Istio mesh (9 services with sidecars, FreeSWITCH excluded)
+make mesh-status
+
+# Check Gateway API routes
+kubectl -n voiceagent get httproutes
+kubectl -n voiceagent get gateways
 ```
+
+### On-Premises Deployment (MetalLB)
+
+```bash
+# Install MetalLB first
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
+
+# Deploy with Istio + MetalLB
+make deploy-on-prem
+
+# Configure FreeSWITCH external IP
+make freeswitch-ip
+```
+
+> Edit `k8s/overlays/on-prem/metallb-config.yaml` to set your site's IP range before deploying.
 
 ### Air-Gapped Deployment
 
 ```bash
 kubectl apply -k k8s/overlays/air-gapped
+```
+
+### K8s Port Forwarding
+
+```bash
+make port-forward-ui            # Dashboard → localhost:3000
+make port-forward-grafana       # Grafana → localhost:3001
+make port-forward-prometheus    # Prometheus → localhost:9090
 ```
 
 ---
@@ -331,6 +382,7 @@ Copy the pre-configured profile from `freeswitch/config/sip_profiles/enterprise/
 
 ## Logs & Debugging
 
+### Docker Compose
 ```bash
 # All services
 docker compose -f docker-compose.sip.yml logs -f
@@ -347,16 +399,46 @@ docker logs voiceagent-gateway-1 | grep -E 'heard|replied|suggestion|summary'
 docker logs voiceagent-freeswitch-1 | grep -v event_socket | grep -v "Ping failed"
 ```
 
+### Kubernetes
+```bash
+# Pod status
+make status
+
+# Per-service logs
+make logs-gw        # Gateway
+make logs-fs        # FreeSWITCH
+make logs-whisper   # Whisper STT
+make logs-piper     # Piper TTS
+make logs-ui        # Next.js UI
+make logs-postgres  # PostgreSQL
+make logs-redis     # Redis
+make logs-chromadb  # ChromaDB
+
+# Istio mesh diagnostics (cloud/on-prem)
+make mesh-status
+istioctl analyze -n voiceagent
+```
+
 ---
 
 ## Cleanup
 
+### Docker Compose
 ```bash
 # Stop all services
 docker compose -f docker-compose.sip.yml down
 
 # Stop and remove all data (PostgreSQL, ChromaDB volumes)
 docker compose -f docker-compose.sip.yml down -v
+```
+
+### Kubernetes
+```bash
+# Tear down services (keep cluster)
+make platform-undeploy
+
+# Tear down everything (cluster + images)
+make clean
 ```
 
 ---
@@ -374,3 +456,8 @@ docker compose -f docker-compose.sip.yml down -v
 | UI: 404 on pages | Old build | Rebuild UI: `docker compose up -d --build ui` |
 | API: 401 Unauthorized | Missing or expired token | Re-run login to get a fresh `$TOKEN` |
 | UI: "Cannot connect to gateway" | CORS or gateway down | Check gateway is running and `NEXT_PUBLIC_GATEWAY_URL` is set |
+| K8s: Pod `ImagePullBackOff` | Image not in KinD | Run `make load-all` to load images into KinD |
+| K8s: Pod `Pending` (PVC) | No storage provisioner | KinD uses local-path by default; cloud needs storageClassName |
+| K8s: Istio sidecar not injecting | Namespace label missing | Check `kubectl get ns voiceagent --show-labels` for `istio-injection=enabled` |
+| K8s: FreeSWITCH no SIP | hostNetwork not set | Local overlay uses hostNetwork; cloud uses LoadBalancer (`make freeswitch-ip`) |
+| K8s: Service unreachable | NetworkPolicy blocking | Check `kubectl -n voiceagent get networkpolicies` and verify source pod is allowed |
