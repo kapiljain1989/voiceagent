@@ -3,7 +3,7 @@ Set FontSize 14
 Set Width 1200
 Set Height 600
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 40ms
+Set TypingSpeed 50ms
 Set Padding 20
 
 Type "# Robocall Detection — 3-layer defense"
@@ -14,34 +14,26 @@ Type "# Layer 3: Keyword detection"
 Enter
 Sleep 500ms
 
-Type@30ms 'curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/api/robocall/test -d "{\"text\":\"Press 1 for your auto warranty\"}" | python3 -m json.tool'
+Type "demos/run-demo.sh robocall-test 'Press 1 for your auto warranty'"
 Enter
 Sleep 3s
 
-Type "# Add to blocklist (Layer 1)"
+Type "# Add to blocklist (Layer 1: <1ms lookup)"
 Enter
 Sleep 500ms
 
-Type@30ms 'curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/api/blocklist -d "{\"number\":\"+15550000001\",\"reason\":\"spam caller\"}" | python3 -m json.tool'
+Type "demos/run-demo.sh blocklist-add '+15550000001' 'spam caller'"
 Enter
 Sleep 2s
 
-Type "# Verify blocklist"
+Type "# View blocklist"
 Enter
 Sleep 500ms
 
-Type@30ms 'curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/blocklist | python3 -m json.tool'
+Type "demos/run-demo.sh blocklist-list"
 Enter
 Sleep 3s
 
-Type "# Remove from blocklist"
-Enter
-Sleep 500ms
-
-Type@30ms 'curl -s -H "Authorization: Bearer $TOKEN" -X DELETE http://localhost:8080/api/blocklist -d "{\"number\":\"+15550000001\"}"'
-Enter
-Sleep 2s
-
-Type "# 3 layers: blocklist (<1ms) → audio pattern → 28 keyword phrases"
+Type "demos/run-demo.sh blocklist-remove '+15550000001'"
 Enter
 Sleep 2s

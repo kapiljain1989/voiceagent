@@ -3,37 +3,33 @@ Set FontSize 14
 Set Width 1200
 Set Height 600
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 40ms
+Set TypingSpeed 50ms
 Set Padding 20
 
-Type "# Kubernetes Deployment — Istio + Gateway API"
+Type "# Kubernetes — Istio + Gateway API"
 Enter
 Sleep 1s
 
-Type "# Validate all 4 overlays"
+Type "# 4 deployment overlays"
 Enter
 Sleep 500ms
 
-Type "for o in local cloud on-prem air-gapped; do echo -n \"$o: \"; kubectl kustomize k8s/overlays/$o 2>/dev/null | grep -c '^kind:'; done"
+Type "demos/run-demo.sh kustomize-count"
 Enter
 Sleep 3s
 
-Type "# Cloud overlay includes Istio mesh + Gateway API"
+Type "# Cloud overlay: Istio mesh resources"
 Enter
 Sleep 500ms
 
-Type "kubectl kustomize k8s/overlays/cloud | grep '^kind:' | sort | uniq -c | sort -rn | head -8"
+Type "demos/run-demo.sh kustomize-cloud"
 Enter
 Sleep 3s
 
-Type "# Deploy to KinD (local)"
+Type "# K8s pods"
 Enter
 Sleep 500ms
 
-Type "kubectl -n voiceagent get pods -o wide"
+Type "demos/run-demo.sh k8s-pods"
 Enter
 Sleep 3s
-
-Type "# mTLS, circuit breaking, network policies — all included"
-Enter
-Sleep 2s
