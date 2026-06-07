@@ -1,0 +1,23 @@
+# docker-compose.sbc.yml — Local SBC Lab Extension
+#
+# Adds Kamailio SBC simulator for testing SBC features with
+# real softphones on your home LAN.
+#
+# Usage:
+#   export EXT_IP=$(ipconfig getifaddr en0)
+#   docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml up -d
+#
+# Or:
+#   make sbc-lab
+
+services:
+  kamailio:
+    build: sbc/
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+    environment:
+      - EXT_IP=${EXT_IP}
+    depends_on:
+      - freeswitch
+    restart: unless-stopped

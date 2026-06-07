@@ -13,7 +13,8 @@ OVERLAY       ?= local
         clean status platform-deploy platform-undeploy deploy-local deploy-cloud deploy-on-prem \
         istio-install istio-uninstall mesh-status freeswitch-ip \
         port-forward-ui port-forward-grafana port-forward-prometheus \
-        demos demos-gifs demos-clean
+        demos demos-gifs demos-clean \
+        sbc-lab sbc-lab-down sbc-test
 
 all: kind-up build-all load-all secret deploy-local
 
@@ -221,6 +222,19 @@ mesh-status:
 	@echo ""
 	@echo "=== mTLS Status ==="
 	@istioctl authn tls-check -n voiceagent
+
+## ─── SBC Local Lab ───────────────────────────────────────────────
+
+sbc-lab:
+	docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml up -d
+	@echo "SBC lab running (11 services). Kamailio SBC at $${EXT_IP}:5060"
+	@echo "Mobile softphone: register to $${EXT_IP}:5060, dial 1000 (AI) or 2000 (co-pilot)"
+
+sbc-lab-down:
+	docker compose -f docker-compose.sip.yml -f docker-compose.sbc.yml down
+
+sbc-test:
+	test/test-sbc-local.sh all
 
 ## ─── Demo recordings ─────────────────────────────────────────────
 

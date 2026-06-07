@@ -1,0 +1,3 @@
+# Downstream targets for Kamailio dispatcher
+# Format: setid destination flags priority attrs
+1 sip:freeswitch:5060 0 0
