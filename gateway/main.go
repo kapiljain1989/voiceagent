@@ -918,13 +918,12 @@ func (s *session) ttsWorker(ctx context.Context) {
 }
 
 func (s *session) piperSynthesize(ctx context.Context, text string) ([]byte, error) {
-	body, _ := json.Marshal(map[string]string{"text": text})
-
-	req, err := http.NewRequestWithContext(ctx, "POST", s.gw.cfg.TTSURL, bytes.NewReader(body))
+	// Piper HTTP reads request.data as raw text — send plain text, not JSON
+	req, err := http.NewRequestWithContext(ctx, "POST", s.gw.cfg.TTSURL, strings.NewReader(text))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "text/plain")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
