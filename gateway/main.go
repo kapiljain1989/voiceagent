@@ -242,7 +242,17 @@ func main() {
 		fmt.Fprintf(w, `{"status":"ok","sessions":%d}`, gw.sessions.Load())
 	})
 
-	srv := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
+	auth := NewAuthHandler(api.db, envOr("JWT_SECRET", ""))
+	auth.RegisterRoutes(mux)
+
+	// Wrap all routes with auth middleware when AUTH_ENABLED=true
+	var handler http.Handler = mux
+	if envOr("AUTH_ENABLED", "") == "true" {
+		handler = auth.Middleware(mux)
+		slog.Info("authentication enabled")
+	}
+
+	srv := &http.Server{Addr: cfg.ListenAddr, Handler: handler}
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
