@@ -26,13 +26,13 @@ spec:
               mountPath: /chroma/chroma
           readinessProbe:
             httpGet:
-              path: /api/v1/heartbeat
+              path: /api/v2/heartbeat
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /api/v1/heartbeat
+              path: /api/v2/heartbeat
               port: 8000
             initialDelaySeconds: 15
             periodSeconds: 20

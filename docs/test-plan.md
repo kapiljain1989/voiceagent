@@ -1,6 +1,6 @@
 # VoiceAgent — Comprehensive Test Plan
 
-Complete testing guide covering all 19 features, 25+ API endpoints, 10 services, and 4 deployment modes.
+Complete testing guide covering all 19 features, 25+ API endpoints, 10 services, 4 deployment overlays (local, cloud, on-prem, air-gapped), Istio service mesh, and Gateway API.
 
 ---
 
@@ -62,21 +62,35 @@ docker compose -f docker-compose.sip.yml ps --format "table {{.Name}}\t{{.Status
 **Expected:** All 10 services show `Up`:
 - gateway, freeswitch, whisper, piper, postgres, chromadb, ui, redis, prometheus, grafana
 
+### Authenticate
+
+```bash
+# Get auth token (all API calls except /healthz, /metrics, /ws, /siprec require this)
+TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+echo "Token: ${TOKEN:0:20}..."
+```
+
 ### Index Test Documents
 
 ```bash
 # Insurance policy
 curl -s -X POST http://localhost:8080/api/documents \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"Insurance Policy v4.2","category":"policy","content":"Section 4.2.1: Water damage from burst pipes is covered under standard homeowner policy. Deductible is $500 for Tier 2. Claims must be filed within 30 days of incident. Emergency repairs up to $1000 are pre-approved without adjuster visit."}'
 
 # Billing FAQ
 curl -s -X POST http://localhost:8080/api/documents \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"Billing FAQ","category":"faq","content":"Late fees are $25 per occurrence. Late fees can be waived once per year for customers in good standing with 12 or more months of account history. Payment plans available for balances over $200. Auto-pay discount of 5 percent on monthly premium."}'
 
 # Retention playbook
 curl -s -X POST http://localhost:8080/api/documents \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"Retention Playbook","category":"procedure","content":"For customers threatening to cancel: Offer 1 is 20 percent discount for 6 months. Offer 2 is free upgrade to next tier for 3 months. Offer 3 is waive all pending fees. Always empathize first. Never argue with the customer. If customer insists after all offers, transfer to retention specialist at extension 4500."}'
 ```
@@ -85,9 +99,11 @@ curl -s -X POST http://localhost:8080/api/documents \
 
 ```bash
 curl -s -X POST http://localhost:8080/api/agents \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"Test Agent 1","email":"agent1@test.com","expertise":["billing","retention"]}'
 
 curl -s -X POST http://localhost:8080/api/agents \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"Test Agent 2","email":"agent2@test.com","expertise":["technical","claims"]}'
 ```
 
@@ -133,7 +149,7 @@ docker exec voiceagent-postgres-1 pg_isready
 curl -s http://localhost:8200/api/v2/heartbeat
 ```
 
-**Expected:** JSON with `nanosecond heartbeat`
+**Expected:** JSON with nanosecond heartbeat timestamp
 
 ### Test 2.6: Prometheus Scraping
 
@@ -863,16 +879,19 @@ curl -s http://localhost:8080/api/stats
 
 ## 23. Dashboard UI Tests
 
-Open each page in a browser and verify rendering:
+Login with `admin` / `admin`, then open each page and verify rendering:
 
 | Page | URL | Check |
 |------|-----|-------|
+| Login | http://localhost:3000/login | Login form, VOICEAGENT branding |
 | Command Center | http://localhost:3000 | Stats cards, active calls table |
 | Agents | http://localhost:3000/agents | Agent table with badges |
 | Calls | http://localhost:3000/calls | Call history table |
 | Live Ops | http://localhost:3000/calls/live | Connect field, transcript panel, co-pilot panel |
 | Documents | http://localhost:3000/documents | Upload dropzone, document list, RAG search |
 | Settings | http://localhost:3000/settings | LLM configs, system prompts, SBC settings |
+| Security | http://localhost:3000/security | Robocall, PII masking, voice biometrics tabs |
+| Infrastructure | http://localhost:3000/infrastructure | Failover circuits, scaling, DTMF, metrics |
 
 ---
 
@@ -990,26 +1009,155 @@ Already running — verify with `docker compose ps`.
 ### Test 27.2: Kustomize Base Render
 
 ```bash
-kubectl kustomize k8s/base 2>/dev/null | grep "kind:" | sort | uniq -c
+kubectl kustomize k8s/base 2>/dev/null | grep "^kind:" | sort | uniq -c | sort -rn
 ```
 
-**Expected:** Deployments, Services, Namespace, ConfigMap
+**Expected:** 10 Deployments, 10 Services, 11 NetworkPolicies, 4 PVCs, 3 Secrets, 2 ConfigMaps, 1 Namespace
 
-### Test 27.3: On-Prem Overlay Render
+### Test 27.3: Local Overlay (KinD)
 
 ```bash
-kubectl kustomize k8s/overlays/on-prem 2>/dev/null | grep "DEPLOYMENT_MODE"
+kubectl kustomize k8s/overlays/local 2>/dev/null | grep "hostNetwork"
+```
+
+**Expected:** `hostNetwork: true` (FreeSWITCH uses host networking)
+
+### Test 27.4: Cloud Overlay (Istio + Gateway API)
+
+```bash
+# Verify Istio resources
+kubectl kustomize k8s/overlays/cloud 2>/dev/null | grep "^kind:" | sort | uniq -c | sort -rn
+```
+
+**Expected:** 69 resources including DestinationRules, AuthorizationPolicies, PeerAuthentication, Gateway, HTTPRoutes, ServiceEntries
+
+```bash
+# Verify FreeSWITCH LB
+kubectl kustomize k8s/overlays/cloud 2>/dev/null | grep -A2 "name: freeswitch-lb" | head -3
+```
+
+**Expected:** Service named `freeswitch-lb`
+
+```bash
+# Verify FreeSWITCH hostNetwork removed
+kubectl kustomize k8s/overlays/cloud 2>/dev/null | grep "hostNetwork" || echo "hostNetwork correctly removed"
+```
+
+**Expected:** `hostNetwork correctly removed`
+
+```bash
+# Verify mTLS
+kubectl kustomize k8s/overlays/cloud 2>/dev/null | grep -A3 "kind: PeerAuthentication"
+```
+
+**Expected:** `mode: STRICT`
+
+### Test 27.5: On-Prem Overlay (MetalLB)
+
+```bash
+kubectl kustomize k8s/overlays/on-prem 2>/dev/null | grep "DEPLOYMENT_MODE" -A1
 ```
 
 **Expected:** `value: on-prem`
 
-### Test 27.4: Air-Gapped Overlay Render
+```bash
+kubectl kustomize k8s/overlays/on-prem 2>/dev/null | grep -E "kind: (IPAddressPool|L2Advertisement)"
+```
+
+**Expected:** MetalLB IPAddressPool + L2Advertisement
+
+### Test 27.6: Air-Gapped Overlay
 
 ```bash
 kubectl kustomize k8s/overlays/air-gapped 2>/dev/null | grep "ENABLE_AIRGAP"
 ```
 
 **Expected:** `value: true`
+
+### Test 27.7: KinD Local Deploy
+
+```bash
+make kind-up
+make build-all load-all
+make deploy-local
+```
+
+**Expected:** All 10 pods reach `Running` state
+
+```bash
+kubectl -n voiceagent get pods
+```
+
+**Expected:**
+```
+NAME                             READY   STATUS    RESTARTS   AGE
+chromadb-xxx                     1/1     Running   0          ...
+grafana-xxx                      1/1     Running   0          ...
+media-gateway-xxx                1/1     Running   0          ...
+piper-xxx                        1/1     Running   0          ...
+postgres-xxx                     1/1     Running   0          ...
+prometheus-xxx                   1/1     Running   0          ...
+redis-xxx                        1/1     Running   0          ...
+ui-xxx                           1/1     Running   0          ...
+whisper-xxx                      1/1     Running   0          ...
+freeswitch-xxx                   1/1     Running   0          ...
+```
+
+### Test 27.8: K8s Service Health (via port-forward)
+
+```bash
+kubectl -n voiceagent port-forward svc/media-gateway 8080:8080 &
+curl -s http://localhost:8080/healthz
+```
+
+**Expected:** `{"status":"ok","sessions":0}`
+
+### Test 27.9: Istio Mesh Status (cloud/on-prem only)
+
+```bash
+# Requires Istio installed: make istio-install
+make mesh-status
+```
+
+**Expected:** 9 services with `SYNCED` proxy status (FreeSWITCH absent)
+
+### Test 27.10: Gateway API Routes (cloud/on-prem only)
+
+```bash
+kubectl -n voiceagent get httproutes
+```
+
+**Expected:** 3 routes: `gateway-api`, `ui`, `grafana`
+
+```bash
+kubectl -n voiceagent get gateways
+```
+
+**Expected:** `voiceagent-gateway` with `Programmed` status
+
+### Test 27.11: Network Policy Enforcement
+
+```bash
+# This should fail (whisper cannot reach redis)
+kubectl -n voiceagent exec deployment/whisper -- wget -qO- --timeout=3 http://redis:6379 2>&1 | head -1
+```
+
+**Expected:** Connection refused or timeout
+
+```bash
+# This should succeed (gateway can reach redis)
+kubectl -n voiceagent exec deployment/media-gateway -- wget -qO- --timeout=3 http://redis:6379 2>&1 | head -1
+```
+
+**Expected:** Connection established (may get protocol error, but TCP connects)
+
+### Test 27.12: FreeSWITCH LB IP (cloud only)
+
+```bash
+make freeswitch-ip
+```
+
+**Expected:** External IP discovered, ConfigMap created, FreeSWITCH restarted
 
 ---
 
@@ -1107,6 +1255,17 @@ wait
 | 19.1-19.2 | Redis store | | |
 | 20.1-20.3 | Prometheus | | |
 | 21.1-21.3 | Agent CRUD | | |
+| 27.2 | Kustomize base render | | |
+| 27.3 | Local overlay (KinD) | | |
+| 27.4 | Cloud overlay (Istio) | | |
+| 27.5 | On-prem overlay (MetalLB) | | |
+| 27.6 | Air-gapped overlay | | |
+| 27.7 | KinD local deploy | | |
+| 27.8 | K8s service health | | |
+| 27.9 | Istio mesh status | | |
+| 27.10 | Gateway API routes | | |
+| 27.11 | Network policy enforcement | | |
+| 27.12 | FreeSWITCH LB IP | | |
 | 22.1-22.3 | Call history | | |
 | 23 | Dashboard UI (6 pages) | | |
 | 24.1-24.2 | SDKs | | |
