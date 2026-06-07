@@ -170,6 +170,31 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// Get or create copilot session
 	copilot := getOrCreateSIPRECSession(s.gw, callID)
 
+	// Extract caller/agent identity from SIP headers and SIPREC metadata
+	if from := req.From(); from != nil && from.Address.User != "" {
+		copilot.callerNumber = from.Address.User
+	}
+	if to := req.To(); to != nil && to.Address.User != "" {
+		copilot.agentNumber = to.Address.User
+	}
+	if siprecXML != "" {
+		if meta, err := ParseSIPRECMetadata([]byte(siprecXML)); err == nil {
+			for _, p := range meta.Participants {
+				if p.AOR != "" {
+					for _, st := range meta.Streams {
+						if st.ParticipantID == p.ID {
+							if st.Label == "caller" || st.Label == "" {
+								copilot.callerNumber = p.AOR
+							} else {
+								copilot.agentNumber = p.AOR
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Store session
 	sess := &siprecRTPSession{
 		callID:     callID,

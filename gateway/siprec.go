@@ -53,6 +53,9 @@ type siprecSession struct {
 	startTime  time.Time
 	gw         *gateway
 
+	callerNumber string // caller phone number / SIP URI
+	agentNumber  string // agent extension / SIP URI
+
 	callerConn *websocket.Conn
 	agentConn  *websocket.Conn
 
@@ -153,6 +156,14 @@ func (gw *gateway) handleSIPREC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s := getOrCreateSIPRECSession(gw, callID)
+
+	// Extract caller/agent identity from query params if provided
+	if caller := r.URL.Query().Get("caller"); caller != "" {
+		s.callerNumber = caller
+	}
+	if agent := r.URL.Query().Get("agent"); agent != "" {
+		s.agentNumber = agent
+	}
 
 	if role == "caller" {
 		s.callerConn = conn
@@ -803,6 +814,8 @@ func (gw *gateway) handleActiveCopilot(w http.ResponseWriter, r *http.Request) {
 			"call_id":    id,
 			"started_at": s.startTime,
 			"duration":   int(time.Since(s.startTime).Seconds()),
+			"caller":     s.callerNumber,
+			"agent":      s.agentNumber,
 		}
 		if s.voiceSentiment != nil {
 			vs := s.voiceSentiment.Analyze()

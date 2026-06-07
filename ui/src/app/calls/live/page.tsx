@@ -59,7 +59,7 @@ export default function LiveOpsPage() {
   const [suggestions, setSuggestions] = useState<SuggestionEntry[]>([]);
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [dialNumber, setDialNumber] = useState("");
-  const [activeSessions, setActiveSessions] = useState<Array<{call_id: string; duration: number; voice_sentiment?: VoiceSentimentData}>>([]);
+  const [activeSessions, setActiveSessions] = useState<Array<{call_id: string; duration: number; caller?: string; agent?: string; voice_sentiment?: VoiceSentimentData}>>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -193,7 +193,11 @@ export default function LiveOpsPage() {
                 );
               })()}
               <Badge variant="outline" className="bg-cyan-500/10 text-cyan-400 border-cyan-500/20 font-mono text-xs">
-                CALL: {callID.slice(0, 16)}...
+                {(() => {
+                  const active = activeSessions.find(s => s.call_id === callID);
+                  if (active?.caller) return `${active.caller} → ${active.agent || "agent"}`;
+                  return `CALL: ${callID.slice(0, 12)}...`;
+                })()}
               </Badge>
               <Button variant="outline" onClick={disconnect} className="border-rose-500/30 text-rose-400 hover:bg-rose-500/10 font-mono text-xs">
                 DISCONNECT
@@ -225,7 +229,14 @@ export default function LiveOpsPage() {
                     <div key={s.call_id} className={`flex items-center justify-between p-2 rounded bg-[#070b14] border ${moodColor}`}>
                       <div className="flex items-center gap-2">
                         <span className={`w-2 h-2 rounded-full ${moodDot} animate-pulse`} />
-                        <span className="font-mono text-xs text-slate-300">{s.call_id.slice(0, 16)}...</span>
+                        {s.caller ? (
+                          <span className="font-mono text-xs text-cyan-400" title={s.call_id}>{s.caller}</span>
+                        ) : (
+                          <span className="font-mono text-xs text-slate-300">{s.call_id.slice(0, 12)}...</span>
+                        )}
+                        {s.agent && (
+                          <span className="font-mono text-[10px] text-emerald-400">→ {s.agent}</span>
+                        )}
                         <span className="font-mono text-[10px] text-slate-500">{s.duration}s</span>
                         {vs && (
                           <div className="flex gap-1.5 ml-1">
