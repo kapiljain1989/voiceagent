@@ -1,11 +1,13 @@
 <include>
   <context name="public">
 
-    <!-- 2xxx: Co-Pilot bridge — ring agent1 on softphone profile -->
+    <!-- 2xxx: Co-Pilot bridge — ring agent1 + SIPREC fork to gateway -->
     <extension name="copilot_bridge">
       <condition field="destination_number" expression="^(2[0-9]{3})$">
-        <action application="set" data="copilot_call=true"/>
-        <action application="export" data="sip_h_X-Copilot-Mode=bridge"/>
+        <action application="answer"/>
+        <!-- Fork caller audio to gateway copilot -->
+        <action application="set" data="res=${uuid_audio_fork ${uuid} start $${media_gateway_ws_base}/siprec?role=caller&amp;call_id=${uuid} mono 16000}"/>
+        <!-- Bridge to agent — customer and agent talk, copilot observes caller side -->
         <action application="bridge" data="sofia/softphone/agent1%$${ext_ip}"/>
       </condition>
     </extension>
