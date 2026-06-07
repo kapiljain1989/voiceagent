@@ -60,11 +60,13 @@ type Config struct {
 	CRMWebhookToken string
 	DBURL           string
 	ChromaURL       string
+	SIPListenAddr   string
 }
 
 func loadConfig() Config {
 	return Config{
 		ListenAddr:   envOr("LISTEN_ADDR", ":8080"),
+		SIPListenAddr: envOr("SIP_LISTEN_ADDR", ""),
 		STTURL:       envOr("STT_URL", "http://whisper:8000/v1/audio/transcriptions"),
 		TTSURL:       envOr("TTS_URL", "http://piper:5000"),
 		GCPProjectID: envOr("GCP_PROJECT_ID", os.Getenv("ANTHROPIC_VERTEX_PROJECT_ID")),
@@ -273,6 +275,18 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	// Start native SIP server for direct SIPREC (no FreeSWITCH needed)
+	if cfg.SIPListenAddr != "" {
+		sipSrv, err := NewSIPServer(gw, cfg.SIPListenAddr)
+		if err != nil {
+			slog.Error("sip server init", "err", err)
+		} else {
+			if err := sipSrv.Start(); err != nil {
+				slog.Error("sip server start", "err", err)
+			}
+		}
+	}
 
 	<-sigCtx.Done()
 	slog.Info("shutting down", "sessions", gw.sessions.Load())

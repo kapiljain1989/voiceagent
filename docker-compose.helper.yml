@@ -1,0 +1,102 @@
+# docker-compose.helper.yml — Standalone AI Helper (No FreeSWITCH)
+#
+# Plug-and-play SIPREC observer. Point your SBC's SIPREC recording
+# server to <host-ip>:5060 — zero VoiceAgent configuration needed.
+#
+# Usage:
+#   docker compose -f docker-compose.helper.yml up -d
+#
+# SBC config:
+#   SIPREC recording server: <host-ip>:5060
+#   That's it. No dialplan, no trunk config, no FreeSWITCH.
+
+services:
+  gateway:
+    build: gateway/
+    image: voiceagent/gateway:latest
+    user: "0:0"
+    ports:
+      - "8080:8080"
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "30000-30050:30000-30050/udp"
+    environment:
+      - LISTEN_ADDR=:8080
+      - SIP_LISTEN_ADDR=:5060
+      - STT_URL=http://whisper:8000/v1/audio/transcriptions
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-${ANTHROPIC_VERTEX_PROJECT_ID}}
+      - GCP_REGION=${GCP_REGION:-${CLOUD_ML_REGION:-us-east5}}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-3-5-haiku@20241022}
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp/adc.json
+      - AUTH_ENABLED=true
+      - JWT_SECRET=voiceagent-production-secret
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgres://voiceagent:voiceagent@postgres:5432/voiceagent?sslmode=disable
+      - CHROMA_URL=http://chromadb:8000
+    volumes:
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-~/.config/gcloud/application_default_credentials.json}:/secrets/gcp/adc.json:ro
+    depends_on:
+      - postgres
+      - chromadb
+
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-base.en
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=voiceagent
+      - POSTGRES_USER=voiceagent
+      - POSTGRES_PASSWORD=voiceagent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8200:8000"
+    volumes:
+      - chromadata:/chroma/chroma
+
+  ui:
+    build: ui/
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://voiceagent:voiceagent@postgres:5432/voiceagent
+      - GATEWAY_URL=http://gateway:8080
+      - CHROMA_URL=http://chromadb:8000
+    depends_on:
+      - gateway
+      - postgres
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - gateway
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=voiceagent
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
+  chromadata:

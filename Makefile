@@ -236,6 +236,16 @@ sbc-lab-down:
 sbc-test:
 	test/test-sbc-local.sh all
 
+## ─── Standalone Helper (No FreeSWITCH) ──────────────────────────
+
+helper:
+	docker compose -f docker-compose.helper.yml up -d
+	@echo "Helper mode running (8 services). SIPREC endpoint at :5060"
+	@echo "Point your SBC SIPREC recording server to this IP:5060"
+
+helper-down:
+	docker compose -f docker-compose.helper.yml down
+
 ## ─── Demo recordings ─────────────────────────────────────────────
 
 demos: demos-gifs
