@@ -614,15 +614,18 @@ func (s *session) claudeWorker(ctx context.Context) {
 			copy(msgs, s.history)
 			s.histMu.Unlock()
 
-			full, err := s.streamClaude(ctx, msgs)
+			full, err := s.streamClaudeNoSplit(ctx, msgs)
 			if err != nil {
 				s.log.Error("claude", "err", err)
 				continue
 			}
 
-			// Check if the response is a structured action (self-service or transfer)
+			// Parse structured action response
 			action := ParseAction(full)
-			spokenText := full
+			spokenText := action.Text
+			if spokenText == "" {
+				spokenText = full
+			}
 
 			if action.Type == "api_call" || action.Type == "transfer" {
 				s.log.Info("action detected", "type", action.Type, "intent", action.Intent, "confidence", action.Confidence)
@@ -631,6 +634,14 @@ func (s *session) claudeWorker(ctx context.Context) {
 
 			s.log.Info("replied", "text", spokenText, "action", action.Type)
 			s.sendEvent("response", spokenText)
+
+			// Send extracted text to TTS (not raw JSON)
+			for _, sentence := range splitSentences(spokenText) {
+				select {
+				case s.sentences <- sentence:
+				case <-ctx.Done():
+				}
+			}
 
 			s.histMu.Lock()
 			s.history = append(s.history, claudeMessage{Role: "assistant", Content: spokenText})
@@ -744,6 +755,102 @@ func sentenceEnd(s string) int {
 		}
 	}
 	return -1
+}
+
+func splitSentences(text string) []string {
+	var sentences []string
+	buf := text
+	for {
+		idx := sentenceEnd(buf)
+		if idx < 0 {
+			break
+		}
+		s := strings.TrimSpace(buf[:idx+1])
+		if s != "" {
+			sentences = append(sentences, s)
+		}
+		buf = buf[idx+1:]
+	}
+	if rest := strings.TrimSpace(buf); rest != "" {
+		sentences = append(sentences, rest)
+	}
+	if len(sentences) == 0 && strings.TrimSpace(text) != "" {
+		sentences = append(sentences, strings.TrimSpace(text))
+	}
+	return sentences
+}
+
+func (s *session) streamClaudeNoSplit(ctx context.Context, messages []claudeMessage) (string, error) {
+	url := fmt.Sprintf(
+		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/anthropic/models/%s:streamRawPredict",
+		s.gw.cfg.GCPRegion, s.gw.cfg.GCPProjectID, s.gw.cfg.GCPRegion, s.gw.cfg.ClaudeModel,
+	)
+
+	systemPrompt := s.gw.cfg.SystemPrompt
+	if s.gw.actions != nil {
+		systemPrompt = actionSystemPrompt
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"anthropic_version": "vertex-2023-10-16",
+		"max_tokens":        512,
+		"system":            systemPrompt,
+		"messages":          messages,
+		"stream":            true,
+	})
+
+	tok, err := s.gw.gcpCreds.TokenSource.Token()
+	if err != nil {
+		return "", fmt.Errorf("gcp token: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("claude %d: %s", resp.StatusCode, string(raw))
+	}
+
+	var full strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+
+		var evt struct {
+			Type  string `json:"type"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		if json.Unmarshal([]byte(data), &evt) != nil {
+			continue
+		}
+		if evt.Type == "message_stop" {
+			break
+		}
+		if evt.Type != "content_block_delta" || evt.Delta.Type != "text_delta" {
+			continue
+		}
+		full.WriteString(evt.Delta.Text)
+	}
+
+	return full.String(), nil
 }
 
 // -------------------------------------------------------------------
