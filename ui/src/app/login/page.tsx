@@ -49,7 +49,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#0a0e1a] -ml-16 lg:-ml-56">
+    <div className="min-h-screen w-screen flex items-center justify-center bg-[#0a0e1a] fixed inset-0 z-50">
       <Card className="w-full max-w-sm bg-[#0f1629] border-cyan-500/15 glow-border p-8">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-8">

@@ -245,12 +245,13 @@ func main() {
 	auth := NewAuthHandler(api.db, envOr("JWT_SECRET", ""))
 	auth.RegisterRoutes(mux)
 
-	// Wrap all routes with auth middleware when AUTH_ENABLED=true
+	// Wrap all routes with CORS + auth middleware
 	var handler http.Handler = mux
 	if envOr("AUTH_ENABLED", "") == "true" {
 		handler = auth.Middleware(mux)
 		slog.Info("authentication enabled")
 	}
+	handler = corsMiddleware(handler)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: handler}
 
@@ -894,6 +895,19 @@ func (s *session) playViaWebSocket(ctx context.Context, pcm []byte) {
 // -------------------------------------------------------------------
 // Audio utilities
 // -------------------------------------------------------------------
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // parseWorkerURLs splits comma-separated URLs into a pool list.
 // Single URL: "http://whisper:8000" → ["http://whisper:8000"]

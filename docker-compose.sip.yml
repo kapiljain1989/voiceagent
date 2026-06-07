@@ -29,6 +29,8 @@ services:
       - TTS_AUDIO_DIR=/tmp/tts
       - CRM_WEBHOOK_URL=${CRM_WEBHOOK_URL:-}
       - CRM_WEBHOOK_TOKEN=${CRM_WEBHOOK_TOKEN:-}
+      - AUTH_ENABLED=true
+      - JWT_SECRET=voiceagent-production-secret
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgres://voiceagent:voiceagent@postgres:5432/voiceagent?sslmode=disable
       - CHROMA_URL=http://chromadb:8000

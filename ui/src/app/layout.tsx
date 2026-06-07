@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, DM_Sans } from "next/font/google";
 import "./globals.css";
-import { Sidebar } from "@/components/layout/Sidebar";
+import { AuthLayout } from "@/components/layout/AuthLayout";
 
 const dmSans = DM_Sans({
   variable: "--font-sans",
@@ -28,10 +28,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${dmSans.variable} ${jetbrains.variable} h-full antialiased`}>
       <body className="min-h-full flex bg-[#0a0e1a]">
-        <Sidebar />
-        <main className="flex-1 ml-16 lg:ml-56 min-h-screen">
-          <div className="p-6 lg:p-8">{children}</div>
-        </main>
+        <AuthLayout>{children}</AuthLayout>
       </body>
     </html>
   );
