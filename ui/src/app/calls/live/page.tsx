@@ -44,8 +44,30 @@ export default function LiveOpsPage() {
   const [suggestions, setSuggestions] = useState<SuggestionEntry[]>([]);
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [dialNumber, setDialNumber] = useState("");
+  const [activeSessions, setActiveSessions] = useState<Array<{call_id: string; duration: number}>>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Poll active copilot sessions every 3s
+  useEffect(() => {
+    async function pollActive() {
+      try {
+        const res = await authFetch("/api/copilot/active");
+        if (res.ok) {
+          const data = await res.json();
+          setActiveSessions(data || []);
+          // Auto-connect to first session if not already connected
+          if (!connected && data?.length > 0 && !callID) {
+            setCallID(data[0].call_id);
+            connectToCall(data[0].call_id);
+          }
+        }
+      } catch {}
+    }
+    pollActive();
+    const interval = setInterval(pollActive, 3000);
+    return () => clearInterval(interval);
+  }, [connected, callID]);
 
   // Auto-scroll transcript
   useEffect(() => {
@@ -156,9 +178,34 @@ export default function LiveOpsPage() {
       {!connected && (
         <Card className="bg-[#0f1629] border-cyan-500/10 glow-border p-5">
           <label className="text-[10px] font-mono text-slate-500 tracking-wider block mb-2">CONNECT TO LIVE CALL</label>
+
+          {/* Active sessions — click to connect */}
+          {activeSessions.length > 0 && (
+            <div className="mb-4">
+              <div className="text-[10px] font-mono text-emerald-400 tracking-wider mb-2">
+                {activeSessions.length} ACTIVE SESSION{activeSessions.length > 1 ? "S" : ""}
+              </div>
+              <div className="space-y-2">
+                {activeSessions.map((s) => (
+                  <div key={s.call_id} className="flex items-center justify-between p-2 rounded bg-[#070b14] border border-emerald-500/20">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="font-mono text-xs text-slate-300">{s.call_id.slice(0, 20)}...</span>
+                      <span className="font-mono text-[10px] text-slate-500">{s.duration}s</span>
+                    </div>
+                    <Button onClick={() => { setCallID(s.call_id); connectToCall(s.call_id); }}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-[10px] px-3 py-1 h-6">
+                      CONNECT
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <Input
-              placeholder="Enter call ID (e.g. live-cc-1234567890)"
+              placeholder="Or paste a call ID manually"
               value={callID}
               onChange={(e) => setCallID(e.target.value)}
               className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm placeholder:text-slate-700"
@@ -167,9 +214,11 @@ export default function LiveOpsPage() {
               CONNECT
             </Button>
           </div>
-          <p className="text-xs text-slate-600 font-mono mt-2">
-            Run &quot;./callcenter-live.sh&quot; in terminal, then paste the call ID here
-          </p>
+          {activeSessions.length === 0 && (
+            <p className="text-xs text-slate-600 font-mono mt-2">
+              No active calls. Dial 2001 from your softphone to start a co-pilot session.
+            </p>
+          )}
         </Card>
       )}
 

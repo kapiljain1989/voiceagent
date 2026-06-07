@@ -765,6 +765,23 @@ func (gw *gateway) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// /api/copilot/active — list active copilot sessions for UI auto-connect
+func (gw *gateway) handleActiveCopilot(w http.ResponseWriter, r *http.Request) {
+	siprecSessionsMu.Lock()
+	sessions := make([]map[string]any, 0, len(siprecSessions))
+	for id, s := range siprecSessions {
+		sessions = append(sessions, map[string]any{
+			"call_id":    id,
+			"started_at": s.startTime,
+			"duration":   int(time.Since(s.startTime).Seconds()),
+		})
+	}
+	siprecSessionsMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sessions)
+}
+
 // /siprec/summary — GET past summaries (placeholder for DB integration)
 func (gw *gateway) handleSummaryQuery(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
