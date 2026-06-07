@@ -293,6 +293,18 @@ func NewPIIMasker() *PIIMasker {
 				Level: "high",
 			},
 			{
+				Name:  "dob_compact",
+				Regex: regexp.MustCompile(`(?i)(?:date of birth|birthday|born on|dob)\s+(?:is\s+)?(\d{6,8})\b`),
+				Mask:  "DOB [REDACTED]",
+				Level: "high",
+			},
+			{
+				Name:  "dob_spoken",
+				Regex: regexp.MustCompile(`(?i)(?:date of birth|birthday|born on|dob)\s+(?:is\s+)?((?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}[\s,]+\d{2,4})`),
+				Mask:  "DOB [REDACTED]",
+				Level: "high",
+			},
+			{
 				Name:  "account_number",
 				Regex: regexp.MustCompile(`(?i)(?:account|routing)\s+(?:number\s+)?(?:is\s+)?(\d{6,})`),
 				Mask:  "account [REDACTED]",
