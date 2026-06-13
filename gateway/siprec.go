@@ -73,6 +73,10 @@ type siprecSession struct {
 
 	voiceSentiment *VoiceSentiment
 
+	// Audio taps — additional listeners for caller audio (e.g., WebRTC bridge)
+	audioTaps   []chan []byte
+	audioTapsMu sync.Mutex
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	log    *slog.Logger
@@ -130,6 +134,37 @@ func getOrCreateSIPRECSession(gw *gateway, callID string) *siprecSession {
 
 	s.log.Info("copilot session starting")
 	return s
+}
+
+func (s *siprecSession) AddAudioTap() chan []byte {
+	ch := make(chan []byte, pcmChanBufSize)
+	s.audioTapsMu.Lock()
+	s.audioTaps = append(s.audioTaps, ch)
+	s.audioTapsMu.Unlock()
+	return ch
+}
+
+func (s *siprecSession) RemoveAudioTap(ch chan []byte) {
+	s.audioTapsMu.Lock()
+	for i, t := range s.audioTaps {
+		if t == ch {
+			s.audioTaps = append(s.audioTaps[:i], s.audioTaps[i+1:]...)
+			break
+		}
+	}
+	s.audioTapsMu.Unlock()
+	close(ch)
+}
+
+func (s *siprecSession) broadcastToTaps(frame []byte) {
+	s.audioTapsMu.Lock()
+	for _, ch := range s.audioTaps {
+		select {
+		case ch <- frame:
+		default:
+		}
+	}
+	s.audioTapsMu.Unlock()
 }
 
 // -------------------------------------------------------------------
@@ -243,6 +278,10 @@ func (s *siprecSession) readLeg(conn *websocket.Conn, ch chan []byte, role strin
 			select {
 			case ch <- buf:
 			default:
+			}
+			// Broadcast to audio taps (e.g., WebRTC bridge to agent)
+			if role == "caller" {
+				s.broadcastToTaps(buf)
 			}
 		}
 	}

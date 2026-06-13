@@ -554,14 +554,14 @@ export default function ConsolePage() {
       setCallState("dialing");
       setTimeout(() => setCallState("connected"), 1200);
     } else {
-      // Pick from queue via API + dial via WebRTC
+      // Pick from queue + bridge SIPREC audio to agent's browser via WebRTC
       if (caller.call_id) {
         await authFetch("/api/queue/pick", { method: "POST", body: JSON.stringify({ call_id: caller.call_id, agent_id: agentProfile?.id }) });
-      }
-      try {
-        await webrtc.dial(caller.number, agentProfile?.id);
-      } catch {
-        setCallState("idle");
+        try {
+          await webrtc.bridge(caller.call_id, agentProfile?.id);
+        } catch {
+          setCallState("idle");
+        }
       }
     }
   }

@@ -43,6 +43,179 @@ func (wm *WebRTCManager) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/webrtc/candidate", wm.handleCandidate)
 	mux.HandleFunc("/api/webrtc/hangup", wm.handleHangup)
 	mux.HandleFunc("/api/webrtc/sessions", wm.handleSessions)
+	mux.HandleFunc("/api/webrtc/bridge", wm.handleBridge)
+}
+
+// handleBridge connects an agent's WebRTC to an existing SIPREC session.
+// Agent hears the caller's audio through their browser.
+func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		SDP        string `json:"sdp"`
+		Type       string `json:"type"`
+		AgentID    string `json:"agent_id"`
+		SIPRECCallID string `json:"siprec_call_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.SIPRECCallID == "" {
+		http.Error(w, "siprec_call_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Find the existing SIPREC session
+	siprecSessionsMu.Lock()
+	siprecSess, exists := siprecSessions[req.SIPRECCallID]
+	siprecSessionsMu.Unlock()
+
+	if !exists {
+		http.Error(w, "SIPREC session not found", http.StatusNotFound)
+		return
+	}
+
+	callID := "bridge-" + req.SIPRECCallID
+	log := slog.With("call_id", callID, "siprec", req.SIPRECCallID, "agent", req.AgentID)
+	log.Info("WebRTC bridge request")
+
+	config := webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{URLs: []string{"stun:stun.l.google.com:19302"}},
+		},
+	}
+
+	pc, err := webrtc.NewPeerConnection(config)
+	if err != nil {
+		log.Error("peer connection", "err", err)
+		http.Error(w, "peer connection failed", http.StatusInternalServerError)
+		return
+	}
+
+	outTrack, err := webrtc.NewTrackLocalStaticSample(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		"audio", "voiceagent-bridge",
+	)
+	if err != nil {
+		pc.Close()
+		http.Error(w, "track creation failed", http.StatusInternalServerError)
+		return
+	}
+	if _, err = pc.AddTrack(outTrack); err != nil {
+		pc.Close()
+		http.Error(w, "add track failed", http.StatusInternalServerError)
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sess := &WebRTCSession{
+		callID:    callID,
+		agentID:   req.AgentID,
+		pc:        pc,
+		outTrack:  outTrack,
+		pcmIn:     make(chan []byte, pcmChanBufSize),
+		pcmOut:    make(chan []byte, 20),
+		cancel:    cancel,
+		startTime: time.Now(),
+		log:       log,
+	}
+
+	wm.mu.Lock()
+	wm.sessions[callID] = sess
+	wm.mu.Unlock()
+
+	// Agent's mic audio → copilot agent channel
+	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		log.Info("agent audio track received")
+		go sess.readIncomingAudio(ctx, track)
+	})
+
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		log.Info("ICE state", "state", state.String())
+		if state == webrtc.ICEConnectionStateFailed || state == webrtc.ICEConnectionStateDisconnected {
+			sess.close()
+			wm.mu.Lock()
+			delete(wm.sessions, callID)
+			wm.mu.Unlock()
+		}
+	})
+
+	offer := webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: req.SDP}
+	if err := pc.SetRemoteDescription(offer); err != nil {
+		cancel(); pc.Close()
+		http.Error(w, "invalid SDP", http.StatusBadRequest)
+		return
+	}
+
+	answer, err := pc.CreateAnswer(nil)
+	if err != nil {
+		cancel(); pc.Close()
+		http.Error(w, "answer failed", http.StatusInternalServerError)
+		return
+	}
+	if err := pc.SetLocalDescription(answer); err != nil {
+		cancel(); pc.Close()
+		http.Error(w, "set local desc failed", http.StatusInternalServerError)
+		return
+	}
+
+	<-webrtc.GatheringCompletePromise(pc)
+
+	// Bridge: tap SIPREC caller audio → WebRTC agent speaker
+	callerTap := siprecSess.AddAudioTap()
+	go func() {
+		defer siprecSess.RemoveAudioTap(callerTap)
+		log.Info("bridge started: SIPREC caller → WebRTC agent")
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case frame, ok := <-callerTap:
+				if !ok {
+					return
+				}
+				if err := outTrack.WriteSample(media.Sample{
+					Data:     frame,
+					Duration: 20 * time.Millisecond,
+				}); err != nil {
+					log.Debug("write to agent", "err", err)
+				}
+			}
+		}
+	}()
+
+	// Agent mic → copilot agent channel (so copilot hears both sides)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case frame, ok := <-sess.pcmIn:
+				if !ok {
+					return
+				}
+				select {
+				case siprecSess.pcmAgent <- frame:
+				default:
+				}
+			}
+		}
+	}()
+
+	log.Info("WebRTC bridge established")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"sdp":     pc.LocalDescription().SDP,
+		"type":    pc.LocalDescription().Type.String(),
+		"call_id": callID,
+	})
 }
 
 func (wm *WebRTCManager) handleOffer(w http.ResponseWriter, r *http.Request) {

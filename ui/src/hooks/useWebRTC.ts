@@ -21,6 +21,7 @@ export interface UseWebRTCReturn {
   callState: CallState;
   callId: string;
   dial: (number: string, agentId?: string) => Promise<void>;
+  bridge: (siprecCallId: string, agentId?: string) => Promise<void>;
   answer: (callId: string) => Promise<void>;
   hangup: () => void;
   mute: () => void;
@@ -201,10 +202,80 @@ export function useWebRTC(): UseWebRTCReturn {
     }
   }, [cleanup, collectStats]);
 
+  const bridge = useCallback(async (siprecCallId: string, agentId?: string) => {
+    setError(null);
+    setCallState("dialing");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      localStreamRef.current = stream;
+
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+      pcRef.current = pc;
+
+      const audioTrack = stream.getAudioTracks()[0];
+      pc.addTrack(audioTrack, stream);
+
+      pc.ontrack = (event) => {
+        if (remoteAudioRef.current && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === "connected") {
+          setCallState("connected");
+        } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+          setCallState("disconnected");
+          cleanup();
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      await new Promise<void>((resolve) => {
+        if (pc.iceGatheringState === "complete") { resolve(); return; }
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === "complete") resolve();
+        };
+        setTimeout(resolve, 3000);
+      });
+
+      const res = await fetch(`${GATEWAY}/api/webrtc/bridge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sdp: pc.localDescription?.sdp,
+          type: pc.localDescription?.type,
+          agent_id: agentId || "console",
+          siprec_call_id: siprecCallId,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`Bridge failed: ${res.status}`);
+
+      const answer = await res.json();
+      setCallId(answer.call_id);
+
+      await pc.setRemoteDescription({
+        type: answer.type as RTCSdpType,
+        sdp: answer.sdp,
+      });
+
+      statsIntervalRef.current = setInterval(collectStats, 2000);
+    } catch (err: any) {
+      setError(err.message || "Bridge failed");
+      setCallState("idle");
+      cleanup();
+    }
+  }, [cleanup, collectStats]);
+
   const answer = useCallback(async (incomingCallId: string) => {
     setError(null);
     setCallId(incomingCallId);
-    // Same as dial but with existing call_id
     await dial("answer", "console");
   }, [dial]);
 
@@ -249,7 +320,7 @@ export function useWebRTC(): UseWebRTCReturn {
   }, [cleanup]);
 
   return {
-    callState, callId, dial, answer, hangup,
+    callState, callId, dial, bridge, answer, hangup,
     mute, unmute, isMuted, sendDTMF,
     stats, error,
   };
