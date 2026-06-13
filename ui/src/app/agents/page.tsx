@@ -49,6 +49,9 @@ export default function AgentsPage() {
     expertise: "", languages: "English", priority: 1, max_calls: 3, queue: "Support",
   });
 
+  // Edit agent
+  const [editAgent, setEditAgent] = useState<Agent | null>(null);
+
   useEffect(() => {
     loadAgents();
     loadQueues();
@@ -89,6 +92,34 @@ export default function AgentsPage() {
       setNewAgent({ name: "", email: "", phone: "", extension: "", department: "Support", expertise: "", languages: "English", priority: 1, max_calls: 3, queue: "Support" });
       loadAgents();
     }
+  }
+
+  async function saveEditAgent() {
+    if (!editAgent) return;
+    await authFetch("/api/agents", {
+      method: "PUT",
+      body: JSON.stringify({
+        id: editAgent.id,
+        name: editAgent.name,
+        email: editAgent.email,
+        phone: editAgent.phone || "",
+        extension: editAgent.extension || "",
+        department: editAgent.department || "",
+        expertise: editAgent.expertise || [],
+        languages: editAgent.languages || [],
+        priority: editAgent.priority || 1,
+        max_calls: editAgent.max_calls || 3,
+        status: editAgent.status || "Available",
+      }),
+    });
+    setEditAgent(null);
+    loadAgents();
+  }
+
+  async function deleteAgent(id: string) {
+    if (!confirm("Delete this agent?")) return;
+    await authFetch("/api/agents", { method: "DELETE", body: JSON.stringify({ id }) });
+    loadAgents();
   }
 
   const filtered = agents.filter((a) =>
@@ -197,6 +228,7 @@ export default function AgentsPage() {
               <th className="text-left px-5 py-3 font-medium">Skills</th>
               <th className="text-left px-5 py-3 font-medium">Calls</th>
               <th className="text-left px-5 py-3 font-medium">Ext</th>
+              <th className="text-left px-5 py-3 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -229,11 +261,17 @@ export default function AgentsPage() {
                   </span>
                 </td>
                 <td className="px-5 py-4 font-mono text-xs text-slate-500">{a.extension || "—"}</td>
+                <td className="px-5 py-4">
+                  <div className="flex gap-1">
+                    <button onClick={() => setEditAgent({...a})} className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 px-2 py-1 rounded hover:bg-cyan-500/10">EDIT</button>
+                    <button onClick={() => deleteAgent(a.id)} className="text-[10px] font-mono text-rose-400 hover:text-rose-300 px-2 py-1 rounded hover:bg-rose-500/10">DEL</button>
+                  </div>
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-600">
+                <td colSpan={7} className="px-5 py-8 text-center text-sm text-slate-600">
                   {agents.length === 0 ? "No agents configured. Click + ADD AGENT." : "No agents match your search."}
                 </td>
               </tr>
@@ -241,6 +279,78 @@ export default function AgentsPage() {
           </tbody>
         </table>
       </Card>
+
+      {/* Edit Agent Panel */}
+      {editAgent && (
+        <Card className="bg-[#0f1629] border-cyan-500/10 glow-border p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-slate-200 tracking-wide">EDIT AGENT — {editAgent.name}</h3>
+            <button onClick={() => setEditAgent(null)} className="text-xs font-mono text-slate-500 hover:text-slate-300">CANCEL</button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">NAME</label>
+              <Input value={editAgent.name} onChange={(e) => setEditAgent({...editAgent, name: e.target.value})}
+                className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">EMAIL</label>
+              <Input value={editAgent.email} onChange={(e) => setEditAgent({...editAgent, email: e.target.value})}
+                className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">EXTENSION</label>
+              <Input value={editAgent.extension || ""} onChange={(e) => setEditAgent({...editAgent, extension: e.target.value})}
+                className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">DEPARTMENT</label>
+              <select value={editAgent.department || "Support"} onChange={(e) => setEditAgent({...editAgent, department: e.target.value})}
+                className="w-full bg-[#070b14] border border-cyan-500/15 rounded-md text-slate-200 font-mono text-sm px-3 py-2">
+                <option value="Support">Support</option><option value="Sales">Sales</option>
+                <option value="Billing">Billing</option><option value="Escalation">Escalation</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">SKILLS</label>
+              <Input value={(editAgent.expertise || []).join(", ")}
+                onChange={(e) => setEditAgent({...editAgent, expertise: e.target.value.split(",").map(s => s.trim()).filter(Boolean)})}
+                className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">LANGUAGES</label>
+              <Input value={(editAgent.languages || []).join(", ")}
+                onChange={(e) => setEditAgent({...editAgent, languages: e.target.value.split(",").map(s => s.trim()).filter(Boolean)})}
+                className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">PRIORITY</label>
+              <select value={editAgent.priority || 1} onChange={(e) => setEditAgent({...editAgent, priority: parseInt(e.target.value)})}
+                className="w-full bg-[#070b14] border border-cyan-500/15 rounded-md text-slate-200 font-mono text-sm px-3 py-2">
+                <option value={1}>1 — Junior</option><option value={2}>2 — Senior</option><option value={3}>3 — Specialist</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">MAX CALLS</label>
+              <Input type="number" value={editAgent.max_calls || 3} onChange={(e) => setEditAgent({...editAgent, max_calls: parseInt(e.target.value) || 3})}
+                className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">STATUS</label>
+              <select value={editAgent.status || "Available"} onChange={(e) => setEditAgent({...editAgent, status: e.target.value})}
+                className="w-full bg-[#070b14] border border-cyan-500/15 rounded-md text-slate-200 font-mono text-sm px-3 py-2">
+                <option value="Available">Available</option><option value="Busy">Busy</option>
+                <option value="On Break">On Break</option><option value="Offline">Offline</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex justify-end mt-4">
+            <Button onClick={saveEditAgent} className="bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs tracking-wider px-6">
+              SAVE CHANGES
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
