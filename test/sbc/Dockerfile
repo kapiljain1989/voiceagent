@@ -1,4 +1,4 @@
-FROM kamailio/kamailio:5.7.3-bullseye
+FROM ghcr.io/kamailio/kamailio:latest
 
 COPY kamailio.cfg /etc/kamailio/kamailio.cfg
 COPY entrypoint.sh /entrypoint.sh
