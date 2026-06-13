@@ -254,19 +254,12 @@ export default function ConsolePage() {
           const data = await res.json();
           if (data?.length > 0) {
             setQueues(prev => {
-              // Only update if structure changed (ignore waitSec changes to prevent flicker)
               const fingerprint = (qs: any[]) => qs.map(q =>
                 `${q.name}:${(q.callers||[]).map((c:any) => c.id).join(",")}`
               ).join("|");
+              // If same callers, don't update state at all (prevents re-render)
               if (fingerprint(data) === fingerprint(prev)) {
-                // Update wait times in-place without replacing array references
-                return prev.map((q: any, qi: number) => ({
-                  ...q,
-                  callers: (q.callers || []).map((c: any, ci: number) => ({
-                    ...c,
-                    waitSec: data[qi]?.callers?.[ci]?.waitSec ?? c.waitSec,
-                  })),
-                }));
+                return prev;
               }
               return data;
             });

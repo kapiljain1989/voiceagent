@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ChevronRight, PhoneIncoming } from "lucide-react";
 import type { QueueData, QueueCaller } from "@/lib/console-types";
 
@@ -20,13 +20,24 @@ export function QueueMonitor({
   callActive: boolean;
 }) {
   const [expandedQueue, setExpandedQueue] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  // Local 1s timer to increment wait times without server round-trip
+  useEffect(() => {
+    const iv = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Reset tick when callers change (new data from server)
+  const callerFingerprint = queues.map(q => (q.callers||[]).map(c => c.id).join(",")).join("|");
+  useEffect(() => { setTick(0); }, [callerFingerprint]);
 
   return (
     <div className="space-y-2">
       {queues.map((q) => {
         const waiting = q.callers.length;
         const maxWaitSec =
-          waiting > 0 ? Math.max(...q.callers.map((c) => c.waitSec)) : 0;
+          waiting > 0 ? Math.max(...q.callers.map((c) => c.waitSec + tick)) : 0;
         const maxWait = formatTime(maxWaitSec);
         const slaColor =
           q.sla >= 90 ? "emerald" : q.sla >= 75 ? "amber" : "rose";
@@ -108,10 +119,11 @@ export function QueueMonitor({
                     return a.id.localeCompare(b.id);
                   })
                   .map((caller, idx) => {
+                    const callerWait = caller.waitSec + tick;
                     const waitColor =
-                      caller.waitSec > 300
+                      callerWait > 300
                         ? "text-rose-400"
-                        : caller.waitSec > 180
+                        : callerWait > 180
                           ? "text-amber-400"
                           : "text-slate-400";
                     const prioStyle: Record<string, string> = {
@@ -146,7 +158,7 @@ export function QueueMonitor({
                             <span
                               className={`text-[10px] font-mono font-semibold shrink-0 ${waitColor}`}
                             >
-                              {formatTime(caller.waitSec)}
+                              {formatTime(callerWait)}
                             </span>
                           </div>
                         </div>
