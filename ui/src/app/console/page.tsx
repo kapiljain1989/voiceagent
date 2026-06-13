@@ -249,22 +249,17 @@ export default function ConsolePage() {
     if (IS_DEMO) return;
     async function loadQueues() {
       try {
-        const res = await authFetch("/api/queues/list");
+        const res = await authFetch("/api/queues");
         if (res.ok) {
           const data = await res.json();
           if (data?.length > 0) {
-            setQueues(data.map((q: any) => ({
-              name: q.name,
-              avgHandle: "—",
-              sla: 0,
-              callers: [],
-            })));
+            setQueues(data);
           }
         }
       } catch {}
     }
     loadQueues();
-    const iv = setInterval(loadQueues, 15000);
+    const iv = setInterval(loadQueues, 5000);
     return () => clearInterval(iv);
   }, []);
 

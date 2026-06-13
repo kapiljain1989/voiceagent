@@ -174,11 +174,12 @@ func (qm *QueueManager) handlePickCall(w http.ResponseWriter, r *http.Request) {
 }
 
 type addQueueRequest struct {
-	QueueName string `json:"queue_name"`
-	CallID    string `json:"call_id"`
-	Number    string `json:"number"`
-	Reason    string `json:"reason"`
-	Priority  string `json:"priority"`
+	QueueName    string `json:"queue_name"`
+	CallID       string `json:"call_id"`
+	Number       string `json:"number"`
+	CallerNumber string `json:"caller_number"`
+	Reason       string `json:"reason"`
+	Priority     string `json:"priority"`
 }
 
 func (qm *QueueManager) handleAddToQueue(w http.ResponseWriter, r *http.Request) {
@@ -196,10 +197,15 @@ func (qm *QueueManager) handleAddToQueue(w http.ResponseWriter, r *http.Request)
 		req.Priority = "normal"
 	}
 
+	number := req.Number
+	if number == "" {
+		number = req.CallerNumber
+	}
+
 	entry := queueEntry{
 		ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
 		CallID:   req.CallID,
-		Number:   req.Number,
+		Number:   number,
 		Reason:   req.Reason,
 		Priority: req.Priority,
 	}
