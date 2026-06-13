@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -80,6 +81,11 @@ func (qm *QueueManager) AddCaller(queueName string, entry queueEntry) {
 	entry.EnterTime = time.Now()
 	entry.QueueName = queueName
 	q.Callers = append(q.Callers, entry)
+
+	// Persist to DB
+	if database != nil {
+		database.EnqueueCaller(context.Background(), entry.CallID, entry.Number, queueName, entry.Reason, entry.Priority)
+	}
 }
 
 func (qm *QueueManager) RemoveCaller(entryID string) (queueEntry, bool) {
