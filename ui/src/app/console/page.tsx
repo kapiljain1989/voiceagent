@@ -185,6 +185,7 @@ export default function ConsolePage() {
   // Core state — synced with WebRTC when active
   const [callState, setCallState] = useState<CallState>("idle");
   const [callId, setCallId] = useState<string | null>(null);
+  const [siprecCallId, setSiprecCallId] = useState<string | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("Available");
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -406,6 +407,7 @@ export default function ConsolePage() {
     setVoiceSentiment(null);
     setCopilotSuggestions([]);
     setShowPostCallSummary(false);
+    setSiprecCallId(null);
     transcriptIdx.current = 0;
     insightIdx.current = 0;
     sentimentIdx.current = 0;
@@ -421,7 +423,7 @@ export default function ConsolePage() {
   }, [webrtc.callState, webrtc.callId]);
 
   // ── SSE stream for real transcripts/copilot when WebRTC call is active ──
-  const sseStream = useSSEStream(webrtc.callState === "connected" ? webrtc.callId : null);
+  const sseStream = useSSEStream(webrtc.callState === "connected" ? (siprecCallId || webrtc.callId) : null);
   useEffect(() => {
     if (sseStream.transcripts.length > 0) {
       setTranscriptEntries(sseStream.transcripts);
@@ -556,11 +558,13 @@ export default function ConsolePage() {
     } else {
       // Pick from queue + bridge SIPREC audio to agent's browser via WebRTC
       if (caller.call_id) {
+        setSiprecCallId(caller.call_id);
         await authFetch("/api/queue/pick", { method: "POST", body: JSON.stringify({ call_id: caller.call_id, agent_id: agentProfile?.id }) });
         try {
           await webrtc.bridge(caller.call_id, agentProfile?.id);
         } catch {
           setCallState("idle");
+          setSiprecCallId(null);
         }
       }
     }
