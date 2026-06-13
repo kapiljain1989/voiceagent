@@ -259,7 +259,7 @@ export default function ConsolePage() {
       } catch {}
     }
     loadQueues();
-    const iv = setInterval(loadQueues, 5000);
+    const iv = setInterval(loadQueues, 2000);
     return () => clearInterval(iv);
   }, []);
 
