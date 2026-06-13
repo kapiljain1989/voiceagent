@@ -9,7 +9,6 @@ const nav = [
   { href: "/", label: "Command", icon: "grid", shortcut: "D" },
   { href: "/agents", label: "Agents", icon: "users", shortcut: "A" },
   { href: "/calls", label: "Calls", icon: "phone", shortcut: "C" },
-  { href: "/calls/live", label: "Live Ops", icon: "radio", shortcut: "L" },
   { href: "/console", label: "Console", icon: "headset", shortcut: "O" },
   { href: "/documents", label: "Knowledge", icon: "file", shortcut: "K" },
   { href: "/security", label: "Security", icon: "shield", shortcut: "X" },
