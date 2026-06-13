@@ -148,6 +148,7 @@ func (qm *QueueManager) handleListQueues(w http.ResponseWriter, r *http.Request)
 
 type pickRequest struct {
 	QueueEntryID string `json:"queue_entry_id"`
+	CallID       string `json:"call_id"`
 	AgentID      string `json:"agent_id"`
 }
 
@@ -157,12 +158,36 @@ func (qm *QueueManager) handlePickCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pickRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.QueueEntryID == "" {
-		http.Error(w, `{"error":"queue_entry_id required"}`, http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
 		return
 	}
 
-	caller, ok := qm.RemoveCaller(req.QueueEntryID)
+	var caller queueEntry
+	var ok bool
+
+	if req.QueueEntryID != "" {
+		caller, ok = qm.RemoveCaller(req.QueueEntryID)
+	} else if req.CallID != "" {
+		// Find by call_id
+		qm.mu.Lock()
+		for _, q := range qm.queues {
+			for i, c := range q.Callers {
+				if c.CallID == req.CallID {
+					caller = c
+					q.Callers = append(q.Callers[:i], q.Callers[i+1:]...)
+					ok = true
+					break
+				}
+			}
+			if ok { break }
+		}
+		qm.mu.Unlock()
+	} else {
+		http.Error(w, `{"error":"queue_entry_id or call_id required"}`, http.StatusBadRequest)
+		return
+	}
+
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "queue entry not found"})
 		return
