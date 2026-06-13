@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -87,59 +88,102 @@ const icons: Record<string, React.ReactNode> = {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.dataset.sidebarCollapsed = String(collapsed);
+  }, [collapsed]);
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-16 lg:w-56 bg-[#070b14] border-r border-cyan-500/10 flex flex-col z-50">
-      {/* Logo */}
-      <div className="h-16 flex items-center px-4 lg:px-5 border-b border-cyan-500/10">
-        <div className="w-8 h-8 rounded bg-cyan-500/20 flex items-center justify-center">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2.5">
-            <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
+    <>
+      {/* Hamburger toggle — always visible */}
+      {collapsed && (
+        <button
+          onClick={() => setCollapsed(false)}
+          className="fixed top-4 left-4 z-[60] w-9 h-9 flex items-center justify-center rounded-md bg-[#0f1629] border border-cyan-500/15 text-slate-400 hover:text-cyan-400 transition-colors"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
-        </div>
-        <span className="hidden lg:block ml-3 font-mono text-sm font-semibold text-cyan-400 tracking-wider">
-          VOICEAGENT
-        </span>
-      </div>
+        </button>
+      )}
 
-      {/* Nav links */}
-      <nav className="flex-1 py-4 space-y-1 px-2 lg:px-3">
-        {nav.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`
-                flex items-center gap-3 px-2.5 lg:px-3 py-2.5 rounded-md text-sm transition-all duration-150
-                ${active
-                  ? "bg-cyan-500/10 text-cyan-400 glow-border"
-                  : "text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]"
-                }
-              `}
-            >
-              <span className={active ? "text-cyan-400" : "text-slate-600"}>
-                {icons[item.icon]}
-              </span>
-              <span className="hidden lg:block font-medium">{item.label}</span>
-              {active && (
-                <span className="hidden lg:block ml-auto w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
-              )}
-            </Link>
-          );
-        })}
-      </nav>
+      {/* Backdrop on mobile */}
+      {!collapsed && (
+        <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={() => setCollapsed(true)} />
+      )}
 
-      {/* Status bar */}
-      <div className="px-3 py-3 border-t border-cyan-500/10">
-        <div className="hidden lg:flex items-center gap-2 text-xs font-mono text-slate-600">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>SYS ONLINE</span>
+      {/* Sidebar */}
+      <aside
+        className={`fixed left-0 top-0 h-screen bg-[#070b14] border-r border-cyan-500/10 flex flex-col z-50 transition-transform duration-200 w-16 lg:w-56 ${
+          collapsed ? "-translate-x-full" : "translate-x-0"
+        }`}
+      >
+        {/* Logo + collapse button */}
+        <div className="h-16 flex items-center justify-between px-4 lg:px-5 border-b border-cyan-500/10">
+          <div className="flex items-center">
+            <div className="w-8 h-8 rounded bg-cyan-500/20 flex items-center justify-center">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2.5">
+                <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
+              </svg>
+            </div>
+            <span className="hidden lg:block ml-3 font-mono text-sm font-semibold text-cyan-400 tracking-wider">
+              VOICEAGENT
+            </span>
+          </div>
+          <button
+            onClick={() => setCollapsed(true)}
+            className="hidden lg:flex w-6 h-6 items-center justify-center rounded text-slate-600 hover:text-cyan-400 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <polyline points="11 17 6 12 11 7" />
+              <polyline points="18 17 13 12 18 7" />
+            </svg>
+          </button>
         </div>
-        <div className="lg:hidden flex justify-center">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+
+        {/* Nav links */}
+        <nav className="flex-1 py-4 space-y-1 px-2 lg:px-3 overflow-y-auto">
+          {nav.map((item) => {
+            const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => { if (window.innerWidth < 1024) setCollapsed(true); }}
+                className={`
+                  flex items-center gap-3 px-2.5 lg:px-3 py-2.5 rounded-md text-sm transition-all duration-150
+                  ${active
+                    ? "bg-cyan-500/10 text-cyan-400 glow-border"
+                    : "text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]"
+                  }
+                `}
+              >
+                <span className={active ? "text-cyan-400" : "text-slate-600"}>
+                  {icons[item.icon]}
+                </span>
+                <span className="hidden lg:block font-medium">{item.label}</span>
+                {active && (
+                  <span className="hidden lg:block ml-auto w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Status bar */}
+        <div className="px-3 py-3 border-t border-cyan-500/10">
+          <div className="hidden lg:flex items-center gap-2 text-xs font-mono text-slate-600">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>SYS ONLINE</span>
+          </div>
+          <div className="lg:hidden flex justify-center">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

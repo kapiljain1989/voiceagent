@@ -35,7 +35,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Sidebar />
-      <main className="flex-1 ml-16 lg:ml-56 min-h-screen">
+      <main className="main-content flex-1 min-h-screen transition-[margin] duration-200 ml-16 lg:ml-56">
         {/* Top bar with user info */}
         <div className="flex items-center justify-end px-6 lg:px-8 pt-4">
           {user && (

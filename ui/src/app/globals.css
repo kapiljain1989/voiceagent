@@ -143,3 +143,8 @@
 .transcript-line[data-speaker="agent"] {
   border-left-color: #10b981;
 }
+
+/* Sidebar collapse — adjust main content margin */
+html[data-sidebar-collapsed="true"] .main-content {
+  margin-left: 0 !important;
+}
