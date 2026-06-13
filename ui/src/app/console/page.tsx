@@ -53,6 +53,7 @@ import { StatusDot, ConsoleBadge, IconBtn } from "@/components/console/Primitive
 import { WebRTCHealth } from "@/components/console/WebRTCHealth";
 import { DialPad } from "@/components/console/DialPad";
 import { useWebRTC } from "@/hooks/useWebRTC";
+import { authFetch } from "@/lib/auth";
 import { TransferPanel } from "@/components/console/TransferPanel";
 import { QueueMonitor } from "@/components/console/QueueMonitor";
 import { AgentDirectory } from "@/components/console/AgentDirectory";
@@ -160,9 +161,26 @@ const STATE_DISPLAY: Record<CallState, { label: string; color: string }> = {
   disconnected: { label: "ENDED", color: "rose" },
 };
 
+interface AgentProfileData {
+  id: string; name: string; extension: string; department: string;
+  expertise: string[]; languages: string[]; priority: number;
+  max_calls: number; current_calls: number; status: string; queues: string[];
+}
+
+interface IncomingCall {
+  call_id: string; caller: string; queue: string;
+}
+
 export default function ConsolePage() {
   // WebRTC hook for real calling
   const webrtc = useWebRTC();
+
+  // Agent profile (fetched on mount)
+  const [agentProfile, setAgentProfile] = useState<AgentProfileData | null>(null);
+  const [profileLinked, setProfileLinked] = useState(true);
+
+  // Incoming call ring
+  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
 
   // Core state — synced with WebRTC when active
   const [callState, setCallState] = useState<CallState>("idle");
@@ -201,6 +219,67 @@ export default function ConsolePage() {
 
   const isCallActive = callState === "connected" || callState === "hold" || callState === "muted";
   const cs = STATE_DISPLAY[callState];
+
+  // ── Fetch agent profile on mount ──
+  useEffect(() => {
+    if (IS_DEMO) return;
+    async function loadProfile() {
+      try {
+        const res = await authFetch("/api/agent/me");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.linked && data.profile) {
+            setAgentProfile(data.profile);
+            setProfileLinked(true);
+            if (data.profile.status) setAgentStatus(data.profile.status as AgentStatus);
+          } else {
+            setProfileLinked(false);
+          }
+        }
+      } catch {}
+    }
+    loadProfile();
+  }, []);
+
+  // ── Fetch real queues ──
+  useEffect(() => {
+    if (IS_DEMO) return;
+    async function loadQueues() {
+      try {
+        const res = await authFetch("/api/queues/list");
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.length > 0) {
+            setQueues(data.map((q: any) => ({
+              name: q.name,
+              avgHandle: "—",
+              sla: 0,
+              callers: [],
+            })));
+          }
+        }
+      } catch {}
+    }
+    loadQueues();
+    const iv = setInterval(loadQueues, 15000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // ── SSE for incoming call ring events ──
+  useEffect(() => {
+    if (IS_DEMO || !agentProfile) return;
+    const gw = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
+    const es = new EventSource(`${gw}/api/agent/me/events`);
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "ring") {
+          setIncomingCall({ call_id: data.call_id, caller: data.caller, queue: data.queue });
+        }
+      } catch {}
+    };
+    return () => es.close();
+  }, [agentProfile]);
 
   // ── Timer ──
   useEffect(() => {
@@ -453,7 +532,9 @@ export default function ConsolePage() {
             VOICEAGENT
           </span>
           <div className="w-px h-5 bg-white/[0.06] mx-1" />
-          <span className="text-[11px] font-mono text-slate-500">CONSOLE</span>
+          <span className="text-[11px] font-mono text-slate-500">
+            {agentProfile ? `${agentProfile.name} — EXT ${agentProfile.extension || "?"}` : "CONSOLE"}
+          </span>
         </div>
 
         <div className="flex items-center gap-3">
@@ -473,7 +554,10 @@ export default function ConsolePage() {
                 {AGENT_STATUSES.map((s) => (
                   <button
                     key={s}
-                    onClick={() => { setAgentStatus(s); setShowStatusMenu(false); }}
+                    onClick={async () => {
+                      setAgentStatus(s); setShowStatusMenu(false);
+                      if (!IS_DEMO) await authFetch("/api/agent/me/status", { method: "POST", body: JSON.stringify({ status: s }) });
+                    }}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/[0.04] transition-colors ${agentStatus === s ? "text-cyan-400" : "text-slate-400"}`}
                   >
                     <StatusDot status={s} size={6} />
@@ -489,6 +573,71 @@ export default function ConsolePage() {
           </div>
         </div>
       </header>
+
+      {/* ── AGENT PROFILE BAR ── */}
+      {agentProfile && !IS_DEMO && (
+        <div className="h-8 shrink-0 flex items-center justify-between px-4 bg-cyan-500/[0.03] border-b border-cyan-500/[0.06]">
+          <div className="flex items-center gap-3 text-[10px] font-mono">
+            <span className="text-cyan-400">{agentProfile.name}</span>
+            <span className="text-slate-600">EXT {agentProfile.extension || "—"}</span>
+            <span className="text-slate-600">{agentProfile.department}</span>
+            {agentProfile.queues?.map(q => (
+              <span key={q} className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400/70 text-[9px]">{q}</span>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 text-[10px] font-mono text-slate-600">
+            <span>Priority: {agentProfile.priority || 1}</span>
+            <span>Calls: {agentProfile.current_calls}/{agentProfile.max_calls}</span>
+          </div>
+        </div>
+      )}
+
+      {!profileLinked && !IS_DEMO && (
+        <div className="h-10 shrink-0 flex items-center justify-center bg-amber-500/10 text-amber-400 text-xs font-mono">
+          No agent profile linked to your account. Ask an admin to link your user to an agent profile.
+        </div>
+      )}
+
+      {/* ── INCOMING CALL RING ── */}
+      {incomingCall && callState === "idle" && (
+        <div className="shrink-0 flex items-center justify-between px-6 py-3 bg-emerald-500/[0.08] border-b border-emerald-500/20 animate-pulse">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center animate-bounce">
+              <Phone size={20} className="text-emerald-400" />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-emerald-300">Incoming Call</div>
+              <div className="text-xs font-mono text-slate-400">
+                {incomingCall.caller} — {incomingCall.queue} queue
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                setCallId(incomingCall.call_id);
+                setCallDuration(0);
+                resetCallData();
+                setIncomingCall(null);
+                try {
+                  await webrtc.dial(incomingCall.caller, agentProfile?.id);
+                } catch {
+                  setCallState("connected");
+                }
+              }}
+              className="px-6 py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs"
+            >
+              ACCEPT
+            </button>
+            <button
+              onClick={() => setIncomingCall(null)}
+              className="px-6 py-2 rounded-md border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 font-mono text-xs"
+            >
+              REJECT
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── NOTIFICATION BAR ── */}
       {notification && (
