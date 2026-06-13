@@ -1,24 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-
-const mockAgents = [
-  { id: "1", name: "Priya Sharma", email: "priya@company.com", phone: "+1 555-0101", expertise: ["billing", "retention"], status: "available", activeCalls: 1, maxCalls: 3 },
-  { id: "2", name: "Raj Patel", email: "raj@company.com", phone: "+1 555-0102", expertise: ["technical", "networking"], status: "busy", activeCalls: 3, maxCalls: 3 },
-  { id: "3", name: "Anita Desai", email: "anita@company.com", phone: "+1 555-0103", expertise: ["sales", "upsell"], status: "available", activeCalls: 0, maxCalls: 5 },
-  { id: "4", name: "Vikram Singh", email: "vikram@company.com", phone: "+1 555-0104", expertise: ["compliance", "insurance"], status: "offline", activeCalls: 0, maxCalls: 3 },
-  { id: "5", name: "Meera Joshi", email: "meera@company.com", phone: "+1 555-0105", expertise: ["billing", "technical", "sales"], status: "available", activeCalls: 2, maxCalls: 4 },
-];
+import { authFetch } from "@/lib/auth";
 
 const statusDot: Record<string, string> = {
+  Available: "bg-emerald-500",
+  Busy: "bg-amber-500",
+  "On Break": "bg-violet-500",
+  "Wrap-up": "bg-cyan-500",
+  Offline: "bg-slate-600",
   available: "bg-emerald-500",
-  busy: "bg-amber-500",
-  offline: "bg-slate-600",
 };
 
 const expertiseColor: Record<string, string> = {
@@ -27,16 +22,79 @@ const expertiseColor: Record<string, string> = {
   sales: "bg-amber-500/15 text-amber-400 border-amber-500/25",
   retention: "bg-rose-500/15 text-rose-400 border-rose-500/25",
   compliance: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
-  insurance: "bg-blue-500/15 text-blue-400 border-blue-500/25",
-  networking: "bg-orange-500/15 text-orange-400 border-orange-500/25",
+  general: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+  escalation: "bg-orange-500/15 text-orange-400 border-orange-500/25",
   upsell: "bg-pink-500/15 text-pink-400 border-pink-500/25",
+  enterprise: "bg-indigo-500/15 text-indigo-400 border-indigo-500/25",
+  payments: "bg-teal-500/15 text-teal-400 border-teal-500/25",
+  refunds: "bg-red-500/15 text-red-400 border-red-500/25",
 };
 
+interface Agent {
+  id: string; name: string; email: string; phone?: string; extension?: string;
+  department?: string; expertise: string[]; status: string;
+  active_calls: number; max_calls?: number; languages?: string[];
+  priority?: number; queues?: string[];
+}
+
 export default function AgentsPage() {
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [queues, setQueues] = useState<string[]>([]);
   const [search, setSearch] = useState("");
-  const filtered = mockAgents.filter((a) =>
-    a.name.toLowerCase().includes(search.toLowerCase()) ||
-    a.expertise.some((e) => e.includes(search.toLowerCase()))
+  const [showAdd, setShowAdd] = useState(false);
+
+  // New agent form
+  const [newAgent, setNewAgent] = useState({
+    name: "", email: "", phone: "", extension: "", department: "Support",
+    expertise: "", languages: "English", priority: 1, max_calls: 3, queue: "Support",
+  });
+
+  useEffect(() => {
+    loadAgents();
+    loadQueues();
+  }, []);
+
+  async function loadAgents() {
+    try {
+      const res = await authFetch("/api/agents");
+      if (res.ok) {
+        const data = await res.json();
+        setAgents(data || []);
+      }
+    } catch {}
+  }
+
+  async function loadQueues() {
+    try {
+      const res = await authFetch("/api/queues/list");
+      if (res.ok) {
+        const data = await res.json();
+        setQueues((data || []).map((q: any) => q.name));
+      }
+    } catch {}
+  }
+
+  async function createAgent() {
+    if (!newAgent.name) return;
+    const body = {
+      name: newAgent.name,
+      email: newAgent.email,
+      phone: newAgent.phone,
+      expertise: newAgent.expertise.split(",").map(s => s.trim()).filter(Boolean),
+    };
+
+    const res = await authFetch("/api/agents", { method: "POST", body: JSON.stringify(body) });
+    if (res.ok) {
+      setShowAdd(false);
+      setNewAgent({ name: "", email: "", phone: "", extension: "", department: "Support", expertise: "", languages: "English", priority: 1, max_calls: 3, queue: "Support" });
+      loadAgents();
+    }
+  }
+
+  const filtered = agents.filter((a) =>
+    a.name?.toLowerCase().includes(search.toLowerCase()) ||
+    a.expertise?.some((e) => e.includes(search.toLowerCase())) ||
+    a.department?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -44,35 +102,88 @@ export default function AgentsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-100">Agent Roster</h1>
-          <p className="text-sm text-slate-500 font-mono mt-1">{mockAgents.length} agents configured</p>
+          <p className="text-sm text-slate-500 font-mono mt-1">{agents.length} agents configured</p>
         </div>
-        <Dialog>
-          <DialogTrigger>
-            <span className="inline-flex items-center justify-center px-4 py-2 rounded-md bg-cyan-600 hover:bg-cyan-500 text-white font-mono text-xs tracking-wider cursor-pointer transition-colors">
-              + ADD AGENT
-            </span>
-          </DialogTrigger>
-          <DialogContent className="bg-[#111827] border-cyan-500/20">
-            <DialogHeader>
-              <DialogTitle className="text-slate-200 font-mono">NEW AGENT</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4 pt-2">
-              <Input placeholder="Full name" className="bg-[#0f1629] border-cyan-500/15 text-slate-200" />
-              <Input placeholder="Email" type="email" className="bg-[#0f1629] border-cyan-500/15 text-slate-200" />
-              <Input placeholder="Phone" className="bg-[#0f1629] border-cyan-500/15 text-slate-200" />
-              <Input placeholder="Expertise (comma-separated)" className="bg-[#0f1629] border-cyan-500/15 text-slate-200" />
-              <Button className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-mono text-xs tracking-wider">
-                CREATE AGENT
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <Button onClick={() => setShowAdd(!showAdd)}
+          className="bg-cyan-600 hover:bg-cyan-500 text-white font-mono text-xs tracking-wider">
+          {showAdd ? "CANCEL" : "+ ADD AGENT"}
+        </Button>
       </div>
 
+      {/* Add Agent Form */}
+      {showAdd && (
+        <Card className="bg-[#0f1629] border-cyan-500/10 glow-border p-5">
+          <h3 className="text-sm font-semibold text-slate-200 tracking-wide mb-4">NEW AGENT</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">NAME</label>
+              <Input value={newAgent.name} onChange={(e) => setNewAgent({...newAgent, name: e.target.value})}
+                placeholder="Sarah Chen" className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">EMAIL</label>
+              <Input value={newAgent.email} onChange={(e) => setNewAgent({...newAgent, email: e.target.value})}
+                placeholder="sarah@company.com" className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">PHONE</label>
+              <Input value={newAgent.phone} onChange={(e) => setNewAgent({...newAgent, phone: e.target.value})}
+                placeholder="+15550101" className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">EXTENSION</label>
+              <Input value={newAgent.extension} onChange={(e) => setNewAgent({...newAgent, extension: e.target.value})}
+                placeholder="2001" className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">DEPARTMENT</label>
+              <select value={newAgent.department} onChange={(e) => setNewAgent({...newAgent, department: e.target.value})}
+                className="w-full bg-[#070b14] border border-cyan-500/15 rounded-md text-slate-200 font-mono text-sm px-3 py-2">
+                <option value="Support">Support</option>
+                <option value="Sales">Sales</option>
+                <option value="Billing">Billing</option>
+                <option value="Escalation">Escalation</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">QUEUE</label>
+              <select value={newAgent.queue} onChange={(e) => setNewAgent({...newAgent, queue: e.target.value})}
+                className="w-full bg-[#070b14] border border-cyan-500/15 rounded-md text-slate-200 font-mono text-sm px-3 py-2">
+                {queues.map(q => <option key={q} value={q}>{q}</option>)}
+                {queues.length === 0 && <option>Support</option>}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">SKILLS (comma-separated)</label>
+              <Input value={newAgent.expertise} onChange={(e) => setNewAgent({...newAgent, expertise: e.target.value})}
+                placeholder="billing, retention, technical" className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">LANGUAGES</label>
+              <Input value={newAgent.languages} onChange={(e) => setNewAgent({...newAgent, languages: e.target.value})}
+                placeholder="English, Spanish" className="bg-[#070b14] border-cyan-500/15 text-slate-200 font-mono text-sm" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-slate-500 block mb-1">PRIORITY</label>
+              <select value={newAgent.priority} onChange={(e) => setNewAgent({...newAgent, priority: parseInt(e.target.value)})}
+                className="w-full bg-[#070b14] border border-cyan-500/15 rounded-md text-slate-200 font-mono text-sm px-3 py-2">
+                <option value={1}>1 — Junior</option>
+                <option value={2}>2 — Senior</option>
+                <option value={3}>3 — Specialist</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex justify-end mt-4">
+            <Button onClick={createAgent} className="bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs tracking-wider px-6">
+              CREATE AGENT
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <Input
-        placeholder="Search agents or expertise..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search agents, skills, or department..."
+        value={search} onChange={(e) => setSearch(e.target.value)}
         className="max-w-md bg-[#0f1629] border-cyan-500/15 text-slate-200 placeholder:text-slate-600 font-mono text-sm"
       />
 
@@ -82,9 +193,10 @@ export default function AgentsPage() {
             <tr className="text-[11px] font-mono text-slate-500 uppercase tracking-wider border-b border-white/5">
               <th className="text-left px-5 py-3 font-medium">Status</th>
               <th className="text-left px-5 py-3 font-medium">Agent</th>
-              <th className="text-left px-5 py-3 font-medium">Expertise</th>
+              <th className="text-left px-5 py-3 font-medium">Dept</th>
+              <th className="text-left px-5 py-3 font-medium">Skills</th>
               <th className="text-left px-5 py-3 font-medium">Calls</th>
-              <th className="text-left px-5 py-3 font-medium">Contact</th>
+              <th className="text-left px-5 py-3 font-medium">Ext</th>
             </tr>
           </thead>
           <tbody>
@@ -92,7 +204,7 @@ export default function AgentsPage() {
               <tr key={a.id} className="border-b border-white/[0.03] hover:bg-cyan-500/[0.03] transition-colors">
                 <td className="px-5 py-4">
                   <div className="flex items-center gap-2">
-                    <span className={`w-2.5 h-2.5 rounded-full ${statusDot[a.status]} ${a.status === "available" ? "animate-pulse" : ""}`} />
+                    <span className={`w-2.5 h-2.5 rounded-full ${statusDot[a.status] || "bg-slate-600"} ${a.status === "Available" || a.status === "available" ? "animate-pulse" : ""}`} />
                     <span className="text-[10px] font-mono text-slate-500 uppercase">{a.status}</span>
                   </div>
                 </td>
@@ -100,9 +212,10 @@ export default function AgentsPage() {
                   <div className="font-medium text-slate-200">{a.name}</div>
                   <div className="text-xs text-slate-500 font-mono">{a.email}</div>
                 </td>
+                <td className="px-5 py-4 text-xs text-slate-400">{a.department || "—"}</td>
                 <td className="px-5 py-4">
                   <div className="flex flex-wrap gap-1.5">
-                    {a.expertise.map((e) => (
+                    {(a.expertise || []).map((e) => (
                       <Badge key={e} variant="outline" className={`text-[10px] font-mono ${expertiseColor[e] || "bg-slate-500/15 text-slate-400"}`}>
                         {e}
                       </Badge>
@@ -111,13 +224,20 @@ export default function AgentsPage() {
                 </td>
                 <td className="px-5 py-4">
                   <span className="font-mono text-sm">
-                    <span className={a.activeCalls >= a.maxCalls ? "text-rose-400" : "text-cyan-400"}>{a.activeCalls}</span>
-                    <span className="text-slate-600">/{a.maxCalls}</span>
+                    <span className={(a.active_calls || 0) >= (a.max_calls || 3) ? "text-rose-400" : "text-cyan-400"}>{a.active_calls || 0}</span>
+                    <span className="text-slate-600">/{a.max_calls || 3}</span>
                   </span>
                 </td>
-                <td className="px-5 py-4 font-mono text-xs text-slate-500">{a.phone}</td>
+                <td className="px-5 py-4 font-mono text-xs text-slate-500">{a.extension || "—"}</td>
               </tr>
             ))}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-600">
+                  {agents.length === 0 ? "No agents configured. Click + ADD AGENT." : "No agents match your search."}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </Card>
