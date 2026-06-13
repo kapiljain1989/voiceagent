@@ -141,6 +141,7 @@ type gateway struct {
 	ttsPool    *WorkerPool
 	rateLimiter *RateLimiter
 	admission  *AdmissionController
+	queueMgr   *QueueManager
 }
 
 // -------------------------------------------------------------------
@@ -276,6 +277,7 @@ func main() {
 
 	gw.registerCallControlRoutes(mux)
 	queueMgr := NewQueueManager(gw)
+	gw.queueMgr = queueMgr
 	queueMgr.RegisterRoutes(mux)
 	agentMgr := NewAgentManager()
 	agentMgr.RegisterRoutes(mux)
@@ -436,6 +438,22 @@ func (gw *gateway) handleFS(w http.ResponseWriter, r *http.Request) {
 
 	gw.sessions.Add(1)
 
+	// Auto-add call to queue for Console visibility
+	if gw.queueMgr != nil {
+		callerNum := fsUUID
+		if meta.CallID != "" {
+			callerNum = meta.CallID
+		}
+		gw.queueMgr.AddCaller("Support", queueEntry{
+			ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
+			CallID:   callID,
+			Number:   callerNum,
+			Reason:   "Incoming call",
+			Priority: "normal",
+		})
+		log.Info("call added to queue", "queue", "Support")
+	}
+
 	s.wg.Add(5)
 	go s.readFromFS(ctx)
 	go s.sttPipeline(ctx)
@@ -447,6 +465,10 @@ func (gw *gateway) handleFS(w http.ResponseWriter, r *http.Request) {
 		s.wg.Wait()
 		gw.sessions.Add(-1)
 		fsConn.Close()
+		// Remove from queue on call end
+		if gw.queueMgr != nil {
+			gw.queueMgr.RemoveCallerByCallID(callID)
+		}
 		log.Info("session ended")
 	}()
 }

@@ -168,6 +168,22 @@ func (gw *gateway) handleSIPREC(w http.ResponseWriter, r *http.Request) {
 	if role == "caller" {
 		s.callerConn = conn
 		s.log.Info("caller leg connected")
+
+		// Auto-add to queue for Console visibility
+		if gw.queueMgr != nil {
+			callerNum := s.callerNumber
+			if callerNum == "" {
+				callerNum = callID[:12]
+			}
+			gw.queueMgr.AddCaller("Support", queueEntry{
+				ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
+				CallID:   callID,
+				Number:   callerNum,
+				Reason:   "Co-pilot session",
+				Priority: "normal",
+			})
+		}
+
 		s.readLeg(conn, s.pcmCaller, "caller")
 	} else {
 		s.agentConn = conn

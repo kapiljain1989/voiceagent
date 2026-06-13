@@ -88,6 +88,19 @@ func (qm *QueueManager) AddCaller(queueName string, entry queueEntry) {
 	}
 }
 
+func (qm *QueueManager) RemoveCallerByCallID(callID string) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	for _, q := range qm.queues {
+		for i, c := range q.Callers {
+			if c.CallID == callID {
+				q.Callers = append(q.Callers[:i], q.Callers[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
 func (qm *QueueManager) RemoveCaller(entryID string) (queueEntry, bool) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
