@@ -13,7 +13,7 @@ const nav = [
   { href: "/console", label: "Console", icon: "headset", shortcut: "O" },
   { href: "/documents", label: "Knowledge", icon: "file", shortcut: "K" },
   { href: "/security", label: "Security", icon: "shield", shortcut: "X" },
-  { href: "/infrastructure", label: "Infra", icon: "server", shortcut: "I" },
+  { href: "/infrastructure", label: "Diagnostics", icon: "server", shortcut: "I" },
   { href: "/settings", label: "Config", icon: "sliders", shortcut: "S" },
 ];
 
