@@ -62,8 +62,9 @@ import { PostCallSummary } from "@/components/console/PostCallSummary";
 import { TranscriptPanel } from "@/components/console/TranscriptPanel";
 
 const AGENT_STATUSES: AgentStatus[] = ["Available", "Busy", "On Break", "Wrap-up"];
+const IS_DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
-// ── Mock data for demo (replaced by real APIs when backend is wired) ──
+// ── Mock data for demo mode (used when NEXT_PUBLIC_DEMO_MODE=true) ──
 
 const MOCK_TEAM: TeamMember[] = [
   { id: "1", name: "Sarah Chen", ext: "2001", status: "Available", department: "Support", activeCalls: 0 },
@@ -195,8 +196,8 @@ export default function ConsolePage() {
   const [transferTarget, setTransferTarget] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ msg: string; color: string } | null>(null);
 
-  // Queue state
-  const [queues, setQueues] = useState<QueueData[]>(MOCK_QUEUES);
+  // Queue state — seed with mock data in demo mode, empty in production
+  const [queues, setQueues] = useState<QueueData[]>(IS_DEMO ? MOCK_QUEUES : []);
 
   const isCallActive = callState === "connected" || callState === "hold" || callState === "muted";
   const cs = STATE_DISPLAY[callState];
@@ -208,9 +209,9 @@ export default function ConsolePage() {
     return () => clearInterval(iv);
   }, [isCallActive]);
 
-  // ── Simulate transcript streaming ──
+  // ── Simulate transcript streaming (demo mode only) ──
   useEffect(() => {
-    if (callState !== "connected") return;
+    if (!IS_DEMO || callState !== "connected") return;
     const iv = setInterval(() => {
       if (transcriptIdx.current < MOCK_TRANSCRIPT.length) {
         const entry = MOCK_TRANSCRIPT[transcriptIdx.current];
@@ -227,18 +228,18 @@ export default function ConsolePage() {
     return () => clearInterval(iv);
   }, [callState]);
 
-  // ── Simulate voice sentiment ──
+  // ── Simulate voice sentiment (demo mode only) ──
   useEffect(() => {
-    if (callState !== "connected") return;
+    if (!IS_DEMO || callState !== "connected") return;
     if (sentimentIdx.current < SENTIMENT_TIMELINE.length) {
       setVoiceSentiment(SENTIMENT_TIMELINE[sentimentIdx.current]);
       sentimentIdx.current++;
     }
   }, [transcriptEntries.length, callState]);
 
-  // ── Simulate copilot suggestions ──
+  // ── Simulate copilot suggestions (demo mode only) ──
   useEffect(() => {
-    if (callState !== "connected") return;
+    if (!IS_DEMO || callState !== "connected") return;
     const iv = setInterval(() => {
       if (suggestionIdx.current < MOCK_COPILOT.length) {
         const s = MOCK_COPILOT[suggestionIdx.current];
@@ -252,8 +253,9 @@ export default function ConsolePage() {
     return () => clearInterval(iv);
   }, [callState]);
 
-  // ── Tick queue wait times ──
+  // ── Tick queue wait times (demo mode) ──
   useEffect(() => {
+    if (!IS_DEMO) return;
     const iv = setInterval(() => {
       setQueues((prev) =>
         prev.map((q) => ({
@@ -265,8 +267,9 @@ export default function ConsolePage() {
     return () => clearInterval(iv);
   }, []);
 
-  // ── Queue SLA fluctuation ──
+  // ── Queue SLA fluctuation (demo mode) ──
   useEffect(() => {
+    if (!IS_DEMO) return;
     const iv = setInterval(() => {
       setQueues((prev) =>
         prev.map((q) => ({
@@ -327,12 +330,15 @@ export default function ConsolePage() {
     if (!phoneNumber) return;
     setCallDuration(0);
     resetCallData();
-    try {
-      await webrtc.dial(phoneNumber, "console-agent");
-    } catch {
-      // Fallback to mock simulation
+    if (IS_DEMO) {
       setCallState("dialing");
       setTimeout(() => setCallState("connected"), 2200);
+    } else {
+      try {
+        await webrtc.dial(phoneNumber, "console-agent");
+      } catch {
+        setCallState("idle");
+      }
     }
   }
 

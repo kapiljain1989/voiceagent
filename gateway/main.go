@@ -62,7 +62,10 @@ type Config struct {
 	ChromaURL       string
 	SIPListenAddr   string
 	Mode            string // "standalone" = SIPREC helper (no FS), "gateway" = full B2BUA with FreeSWITCH
+	DemoMode        bool
 }
+
+var database *Database
 
 func loadConfig() Config {
 	mode := envOr("VOICEAGENT_MODE", "gateway")
@@ -92,6 +95,7 @@ func loadConfig() Config {
 		CRMWebhookToken: os.Getenv("CRM_WEBHOOK_TOKEN"),
 		DBURL:           os.Getenv("DATABASE_URL"),
 		ChromaURL:       envOr("CHROMA_URL", ""),
+		DemoMode:        os.Getenv("DEMO_MODE") == "true",
 	}
 }
 
@@ -205,6 +209,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize database with migrations
+	db, err := NewDatabase(cfg.DBURL)
+	if err != nil {
+		slog.Error("database connection failed", "err", err)
+	} else if db != nil {
+		if err := db.RunMigrations(); err != nil {
+			slog.Error("database migrations failed", "err", err)
+		}
+		database = db
+		slog.Info("database connected and migrated")
+	}
+
 	gw := &gateway{
 		cfg:         &cfg,
 		gcpCreds:    gcpCreds,
@@ -212,8 +228,8 @@ func main() {
 		metrics:     NewMetrics(),
 		sttPool:     NewWorkerPool("stt", parseWorkerURLs(cfg.STTURL)),
 		ttsPool:     NewWorkerPool("tts", parseWorkerURLs(cfg.TTSURL)),
-		rateLimiter: NewRateLimiter(100, 200), // 100 req/s per IP, burst 200
-		admission:   NewAdmissionController(500), // max 500 concurrent sessions
+		rateLimiter: NewRateLimiter(100, 200),
+		admission:   NewAdmissionController(500),
 	}
 
 	mux := http.NewServeMux()
@@ -267,12 +283,14 @@ func main() {
 	})
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"mode":           cfg.Mode,
-			"sip_listen":     cfg.SIPListenAddr,
-			"stt_url":        cfg.STTURL,
-			"tts_url":        cfg.TTSURL,
-			"claude_model":   cfg.ClaudeModel,
+		json.NewEncoder(w).Encode(map[string]any{
+			"mode":         cfg.Mode,
+			"sip_listen":   cfg.SIPListenAddr,
+			"stt_url":      cfg.STTURL,
+			"tts_url":      cfg.TTSURL,
+			"claude_model": cfg.ClaudeModel,
+			"demo_mode":    cfg.DemoMode,
+			"database":     database != nil,
 		})
 	})
 
