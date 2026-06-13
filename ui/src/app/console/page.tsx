@@ -217,6 +217,9 @@ export default function ConsolePage() {
   // Queue state — seed with mock data in demo mode, empty in production
   const [queues, setQueues] = useState<QueueData[]>(IS_DEMO ? MOCK_QUEUES : []);
 
+  // Team directory — real agents from API
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>(IS_DEMO ? MOCK_TEAM : []);
+
   const isCallActive = callState === "connected" || callState === "hold" || callState === "muted";
   const cs = STATE_DISPLAY[callState];
 
@@ -262,6 +265,32 @@ export default function ConsolePage() {
     }
     loadQueues();
     const iv = setInterval(loadQueues, 15000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // ── Fetch real team directory ──
+  useEffect(() => {
+    if (IS_DEMO) return;
+    async function loadTeam() {
+      try {
+        const res = await authFetch("/api/agents");
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.length > 0) {
+            setTeamMembers(data.map((a: any) => ({
+              id: a.id,
+              name: a.name || "Unknown",
+              ext: a.extension || "—",
+              status: a.status || "Offline",
+              department: a.department || "Support",
+              activeCalls: a.active_calls || 0,
+            })));
+          }
+        }
+      } catch {}
+    }
+    loadTeam();
+    const iv = setInterval(loadTeam, 10000);
     return () => clearInterval(iv);
   }, []);
 
@@ -503,7 +532,7 @@ export default function ConsolePage() {
     }
   }
 
-  function handlePickCall(caller: QueueCaller, queueName: string) {
+  async function handlePickCall(caller: QueueCaller, queueName: string) {
     if (isCallActive) return;
     setQueues((prev) =>
       prev.map((q) =>
@@ -513,11 +542,24 @@ export default function ConsolePage() {
       ),
     );
     setPhoneNumber(caller.number);
-    showNotif(`Picked up ${caller.number} from ${queueName} queue — ${caller.reason}`, "emerald");
-    setCallState("dialing");
+    showNotif(`Picked up ${caller.number} from ${queueName} queue`, "emerald");
     setCallDuration(0);
     resetCallData();
-    setTimeout(() => setCallState("connected"), 1200);
+
+    if (IS_DEMO) {
+      setCallState("dialing");
+      setTimeout(() => setCallState("connected"), 1200);
+    } else {
+      // Pick from queue via API + dial via WebRTC
+      if (caller.call_id) {
+        await authFetch("/api/queue/pick", { method: "POST", body: JSON.stringify({ call_id: caller.call_id, agent_id: agentProfile?.id }) });
+      }
+      try {
+        await webrtc.dial(caller.number, agentProfile?.id);
+      } catch {
+        setCallState("idle");
+      }
+    }
   }
 
   return (
@@ -778,7 +820,7 @@ export default function ConsolePage() {
           <div className="px-3 pt-2">
             <TransferPanel
               visible={showTransfer}
-              agents={MOCK_TEAM}
+              agents={teamMembers}
               onBlindTransfer={handleBlindTransfer}
               onAttendedTransfer={handleAttendedTransfer}
               onClose={() => setShowTransfer(false)}
@@ -804,12 +846,12 @@ export default function ConsolePage() {
               <div className="px-4 py-2.5 flex items-center justify-between">
                 <span className="text-[10px] font-mono text-slate-500 tracking-wider">TEAM DIRECTORY</span>
                 <span className="text-[10px] font-mono text-slate-700">
-                  {MOCK_TEAM.filter((a) => a.status === "Available").length} online
+                  {teamMembers.filter((a) => a.status === "Available").length} online
                 </span>
               </div>
               <div className="flex-1 overflow-y-auto px-2 pb-2">
                 <AgentDirectory
-                  agents={MOCK_TEAM}
+                  agents={teamMembers}
                   callActive={isCallActive}
                   onTransfer={(a) => handleBlindTransfer(a.name)}
                   onConference={handleConference}
