@@ -154,7 +154,10 @@ func (h *APIHandler) listAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.QueryContext(r.Context(),
-		"SELECT id, name, email, phone, expertise, status, max_calls, active_calls FROM agents ORDER BY name")
+		`SELECT id, name, COALESCE(email,''), COALESCE(phone,''), expertise, status,
+			max_calls, active_calls, COALESCE(extension,''), COALESCE(department,'Support'),
+			languages, COALESCE(priority,1), COALESCE(current_calls,0)
+		FROM agents ORDER BY name`)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -163,15 +166,21 @@ func (h *APIHandler) listAgents(w http.ResponseWriter, r *http.Request) {
 
 	var agents []map[string]any
 	for rows.Next() {
-		var id, name, email, status string
-		var phone sql.NullString
-		var expertise []string
-		var maxCalls, activeCalls int
-		rows.Scan(&id, &name, &email, &phone, &expertise, &status, &maxCalls, &activeCalls)
+		var id, name, email, phone, status, extension, department string
+		var expertiseStr, languagesStr string
+		var maxCalls, activeCalls, priority, currentCalls int
+		if err := rows.Scan(&id, &name, &email, &phone, &expertiseStr, &status,
+			&maxCalls, &activeCalls, &extension, &department,
+			&languagesStr, &priority, &currentCalls); err != nil {
+			slog.Error("scan agent", "err", err)
+			continue
+		}
 		agents = append(agents, map[string]any{
-			"id": id, "name": name, "email": email, "phone": phone.String,
-			"expertise": expertise, "status": status,
-			"maxCalls": maxCalls, "activeCalls": activeCalls,
+			"id": id, "name": name, "email": email, "phone": phone,
+			"expertise": parsePostgresArray(expertiseStr), "status": status,
+			"max_calls": maxCalls, "active_calls": currentCalls,
+			"extension": extension, "department": department,
+			"languages": parsePostgresArray(languagesStr), "priority": priority,
 		})
 	}
 	if agents == nil {

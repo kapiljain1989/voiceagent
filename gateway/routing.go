@@ -14,6 +14,25 @@ type CallRouter struct {
 	db *sql.DB
 }
 
+func parsePostgresArray(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "{}" || s == "NULL" {
+		return nil
+	}
+	s = strings.TrimPrefix(s, "{")
+	s = strings.TrimSuffix(s, "}")
+	parts := strings.Split(s, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		p = strings.Trim(p, "\"")
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
 type QueueDef struct {
 	ID             string   `json:"id"`
 	Name           string   `json:"name"`
@@ -188,8 +207,8 @@ func (r *CallRouter) handleListQueues(w http.ResponseWriter, req *http.Request) 
 	defer cancel()
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT q.id, q.name, q.description, q.skills_required, q.max_wait_seconds,
-			COALESCE(q.overflow_queue, ''),
+		SELECT q.id, q.name, COALESCE(q.description,''), q.skills_required,
+			COALESCE(q.max_wait_seconds,300), COALESCE(q.overflow_queue, ''),
 			(SELECT COUNT(*) FROM queue_entries WHERE queue_name=q.name AND status='waiting')
 		FROM queues q ORDER BY q.name`)
 	if err != nil {
@@ -201,7 +220,12 @@ func (r *CallRouter) handleListQueues(w http.ResponseWriter, req *http.Request) 
 	var queues []QueueDef
 	for rows.Next() {
 		var q QueueDef
-		rows.Scan(&q.ID, &q.Name, &q.Description, &q.SkillsRequired, &q.MaxWaitSeconds, &q.OverflowQueue, &q.CallerCount)
+		var skillsStr string
+		if err := rows.Scan(&q.ID, &q.Name, &q.Description, &skillsStr, &q.MaxWaitSeconds, &q.OverflowQueue, &q.CallerCount); err != nil {
+			slog.Error("scan queue", "err", err)
+			continue
+		}
+		q.SkillsRequired = parsePostgresArray(skillsStr)
 		queues = append(queues, q)
 	}
 	writeJSON(w, http.StatusOK, queues)
