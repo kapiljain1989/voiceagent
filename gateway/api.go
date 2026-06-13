@@ -157,7 +157,9 @@ func (h *APIHandler) listAgents(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, name, COALESCE(email,''), COALESCE(phone,''), expertise, status,
 			max_calls, active_calls, COALESCE(extension,''), COALESCE(department,'Support'),
 			languages, COALESCE(priority,1), COALESCE(current_calls,0)
-		FROM agents ORDER BY name`)
+		FROM agents ORDER BY
+			CASE status WHEN 'Available' THEN 0 WHEN 'Busy' THEN 1 WHEN 'On Break' THEN 2 WHEN 'Wrap-up' THEN 3 ELSE 4 END,
+			name`)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
