@@ -41,3 +41,5 @@ demos/gifs/*.webm
 
 # Claude
 .claude/
+*.log
+*.log.*
