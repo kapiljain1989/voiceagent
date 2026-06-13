@@ -1,42 +1,53 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-
-const stats = [
-  { label: "ACTIVE CALLS", value: "7", delta: "+2", trend: "up", color: "cyan" },
-  { label: "TOTAL TODAY", value: "142", delta: "+18%", trend: "up", color: "emerald" },
-  { label: "AVG DURATION", value: "4:32", delta: "-0:12", trend: "down", color: "amber" },
-  { label: "CSAT SCORE", value: "78%", delta: "+3%", trend: "up", color: "emerald" },
-];
-
-const activeCalls = [
-  { id: "a1", caller: "+1 (555) 234-8901", agent: "Priya Sharma", duration: "3:45", mode: "copilot", sentiment: "positive" },
-  { id: "a2", caller: "+1 (555) 876-5432", agent: "AI Agent", duration: "1:22", mode: "interactive", sentiment: "neutral" },
-  { id: "a3", caller: "+1 (555) 111-2233", agent: "Raj Patel", duration: "7:18", mode: "copilot", sentiment: "negative" },
-  { id: "a4", caller: "+44 20 7946 0958", agent: "AI Agent", duration: "0:48", mode: "interactive", sentiment: "neutral" },
-];
-
-const recentCalls = [
-  { id: "r1", time: "14:32", caller: "+1 (555) 999-0001", summary: "Billing inquiry resolved — waived late fee", sentiment: "positive", duration: "5:12" },
-  { id: "r2", time: "14:18", caller: "+1 (555) 888-0002", summary: "Technical support — router reset walkthrough", sentiment: "neutral", duration: "8:45" },
-  { id: "r3", time: "13:55", caller: "+1 (555) 777-0003", summary: "Service cancellation request — retained with offer", sentiment: "negative", duration: "12:30" },
-  { id: "r4", time: "13:41", caller: "+1 (555) 666-0004", summary: "Account upgrade — premium plan activated", sentiment: "positive", duration: "3:20" },
-  { id: "r5", time: "13:28", caller: "+1 (555) 555-0005", summary: "Insurance claim status check — pending review", sentiment: "neutral", duration: "4:15" },
-];
+import { authFetch } from "@/lib/auth";
 
 const sentimentColor: Record<string, string> = {
   positive: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
   neutral: "bg-slate-500/20 text-slate-400 border-slate-500/30",
   negative: "bg-rose-500/20 text-rose-400 border-rose-500/30",
 };
-
 const modeStyle: Record<string, string> = {
   copilot: "bg-violet-500/20 text-violet-400 border-violet-500/30",
   interactive: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30",
 };
 
+function formatDuration(s: number) {
+  if (!s) return "—";
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
 export default function Dashboard() {
+  const [stats, setStats] = useState<any>(null);
+  const [activeSessions, setActiveSessions] = useState<any[]>([]);
+  const [recentCalls, setRecentCalls] = useState<any[]>([]);
+  const [agents, setAgents] = useState<any[]>([]);
+  const [services, setServices] = useState<any[]>([]);
+  const [config, setConfig] = useState<any>(null);
+
+  useEffect(() => {
+    loadAll();
+    const iv = setInterval(loadAll, 10000);
+    return () => clearInterval(iv);
+  }, []);
+
+  async function loadAll() {
+    try { const r = await authFetch("/api/stats"); if (r.ok) setStats(await r.json()); } catch {}
+    try { const r = await authFetch("/api/copilot/active"); if (r.ok) setActiveSessions(await r.json()); } catch {}
+    try { const r = await authFetch("/api/calls"); if (r.ok) { const d = await r.json(); setRecentCalls((d || []).slice(0, 8)); } } catch {}
+    try { const r = await authFetch("/api/agents"); if (r.ok) setAgents(await r.json()); } catch {}
+    try { const r = await authFetch("/api/services/status"); if (r.ok) setServices(await r.json()); } catch {}
+    try { const r = await authFetch("/api/config"); if (r.ok) setConfig(await r.json()); } catch {}
+  }
+
+  const onlineAgents = agents.filter((a: any) => a.status === "Available" || a.status === "available");
+  const onlineServices = services.filter((s: any) => s.status === "online");
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -47,93 +58,168 @@ export default function Dashboard() {
             {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
           </p>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-xs font-mono text-emerald-400">ALL SYSTEMS NOMINAL</span>
+        <div className="flex items-center gap-3">
+          {config && (
+            <Badge variant="outline" className="font-mono text-[10px] bg-cyan-500/10 text-cyan-400 border-cyan-500/20">
+              {config.mode?.toUpperCase()} MODE
+            </Badge>
+          )}
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md ${onlineServices.length === services.length && services.length > 0 ? "bg-emerald-500/10 border border-emerald-500/20" : "bg-amber-500/10 border border-amber-500/20"}`}>
+            <span className={`w-2 h-2 rounded-full ${onlineServices.length === services.length && services.length > 0 ? "bg-emerald-500" : "bg-amber-500"} animate-pulse`} />
+            <span className={`text-xs font-mono ${onlineServices.length === services.length && services.length > 0 ? "text-emerald-400" : "text-amber-400"}`}>
+              {onlineServices.length}/{services.length} SERVICES
+            </span>
+          </div>
         </div>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        {stats.map((s) => (
-          <Card key={s.label} className="bg-[#0f1629] border-cyan-500/10 p-5 glow-border">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] font-mono font-medium tracking-widest text-slate-500">{s.label}</span>
-              <span className={`text-xs font-mono ${s.trend === "up" ? "text-emerald-400" : "text-amber-400"}`}>
-                {s.delta}
-              </span>
-            </div>
-            <div className="stat-number text-3xl font-mono font-semibold text-slate-100">{s.value}</div>
-          </Card>
-        ))}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <Card className="bg-[#0f1629] border-cyan-500/10 p-4 glow-border">
+          <div className="text-[10px] font-mono text-slate-500 tracking-wider mb-2">ACTIVE CALLS</div>
+          <div className="font-mono text-3xl font-semibold text-cyan-400">{activeSessions.length}</div>
+        </Card>
+        <Card className="bg-[#0f1629] border-cyan-500/10 p-4 glow-border">
+          <div className="text-[10px] font-mono text-slate-500 tracking-wider mb-2">TODAY</div>
+          <div className="font-mono text-3xl font-semibold text-slate-100">{stats?.totalToday || 0}</div>
+        </Card>
+        <Card className="bg-[#0f1629] border-cyan-500/10 p-4 glow-border">
+          <div className="text-[10px] font-mono text-slate-500 tracking-wider mb-2">AVG DURATION</div>
+          <div className="font-mono text-3xl font-semibold text-slate-100">{formatDuration(stats?.avgDuration || 0)}</div>
+        </Card>
+        <Card className="bg-[#0f1629] border-emerald-500/10 p-4">
+          <div className="text-[10px] font-mono text-slate-500 tracking-wider mb-2">POSITIVE</div>
+          <div className="font-mono text-3xl font-semibold text-emerald-400">{stats?.sentimentBreakdown?.positive || 0}</div>
+        </Card>
+        <Card className="bg-[#0f1629] border-rose-500/10 p-4">
+          <div className="text-[10px] font-mono text-slate-500 tracking-wider mb-2">NEGATIVE</div>
+          <div className="font-mono text-3xl font-semibold text-rose-400">{stats?.sentimentBreakdown?.negative || 0}</div>
+        </Card>
+        <Card className="bg-[#0f1629] border-violet-500/10 p-4">
+          <div className="text-[10px] font-mono text-slate-500 tracking-wider mb-2">AGENTS ONLINE</div>
+          <div className="font-mono text-3xl font-semibold text-violet-400">{onlineAgents.length}<span className="text-lg text-slate-600">/{agents.length}</span></div>
+        </Card>
       </div>
 
-      {/* Active Calls */}
-      <Card className="bg-[#0f1629] border-cyan-500/10 glow-border overflow-hidden">
-        <div className="px-5 py-4 border-b border-cyan-500/10 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse-glow" />
-            <h2 className="text-sm font-semibold text-slate-200 tracking-wide">ACTIVE CALLS</h2>
-          </div>
-          <span className="text-xs font-mono text-slate-500">{activeCalls.length} channels</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-[11px] font-mono text-slate-500 uppercase tracking-wider border-b border-white/5">
-                <th className="text-left px-5 py-3 font-medium">Caller</th>
-                <th className="text-left px-5 py-3 font-medium">Agent</th>
-                <th className="text-left px-5 py-3 font-medium">Duration</th>
-                <th className="text-left px-5 py-3 font-medium">Mode</th>
-                <th className="text-left px-5 py-3 font-medium">Sentiment</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeCalls.map((c) => (
-                <tr key={c.id} className="border-b border-white/[0.03] hover:bg-cyan-500/[0.03] transition-colors">
-                  <td className="px-5 py-3 font-mono text-sm text-slate-300">{c.caller}</td>
-                  <td className="px-5 py-3 text-slate-300">{c.agent}</td>
-                  <td className="px-5 py-3 font-mono text-cyan-400">{c.duration}</td>
-                  <td className="px-5 py-3">
-                    <Badge variant="outline" className={`text-[10px] font-mono uppercase ${modeStyle[c.mode]}`}>
-                      {c.mode}
-                    </Badge>
-                  </td>
-                  <td className="px-5 py-3">
-                    <Badge variant="outline" className={`text-[10px] font-mono uppercase ${sentimentColor[c.sentiment]}`}>
-                      {c.sentiment}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      {/* Recent Calls */}
-      <Card className="bg-[#0f1629] border-cyan-500/10 glow-border">
-        <div className="px-5 py-4 border-b border-cyan-500/10">
-          <h2 className="text-sm font-semibold text-slate-200 tracking-wide">RECENT COMPLETIONS</h2>
-        </div>
-        <div className="divide-y divide-white/[0.03]">
-          {recentCalls.map((c) => (
-            <div key={c.id} className="px-5 py-3.5 flex items-start gap-4 hover:bg-cyan-500/[0.02] transition-colors cursor-pointer">
-              <span className="font-mono text-xs text-slate-500 mt-0.5 w-12 shrink-0">{c.time}</span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-mono text-sm text-slate-300">{c.caller}</span>
-                  <Badge variant="outline" className={`text-[10px] font-mono ${sentimentColor[c.sentiment]}`}>
-                    {c.sentiment}
-                  </Badge>
-                </div>
-                <p className="text-sm text-slate-500 truncate">{c.summary}</p>
-              </div>
-              <span className="font-mono text-xs text-slate-600 shrink-0">{c.duration}</span>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Active Sessions */}
+        <Card className="lg:col-span-2 bg-[#0f1629] border-cyan-500/10 glow-border overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-cyan-500/10 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse-glow" />
+              <h2 className="text-xs font-mono font-semibold text-slate-300 tracking-wider">ACTIVE SESSIONS</h2>
             </div>
-          ))}
-        </div>
-      </Card>
+            <span className="text-[10px] font-mono text-slate-500">{activeSessions.length} live</span>
+          </div>
+          {activeSessions.length > 0 ? (
+            <div className="divide-y divide-white/[0.03]">
+              {activeSessions.map((s: any, i: number) => {
+                const vs = s.voice_sentiment;
+                return (
+                  <div key={i} className="px-5 py-3 flex items-center justify-between hover:bg-cyan-500/[0.02]">
+                    <div className="flex items-center gap-3">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <div>
+                        <span className="font-mono text-sm text-cyan-400">{s.caller || s.call_id?.slice(0, 12) || "—"}</span>
+                        {s.agent && <span className="text-xs text-slate-500 ml-2">→ {s.agent}</span>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono text-xs text-slate-500">{s.duration}s</span>
+                      {vs && (
+                        <Badge variant="outline" className={`text-[9px] font-mono ${vs.frustration > 0.5 ? "bg-rose-500/15 text-rose-400" : vs.agitation > 0.4 ? "bg-amber-500/15 text-amber-400" : "bg-emerald-500/15 text-emerald-400"}`}>
+                          {vs.frustration > 0.5 ? "FRUSTRATED" : vs.agitation > 0.4 ? "AGITATED" : "CALM"}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="px-5 py-8 text-center text-sm text-slate-600">No active calls</div>
+          )}
+        </Card>
+
+        {/* Agent Status */}
+        <Card className="bg-[#0f1629] border-violet-500/10 overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-violet-500/10">
+            <h2 className="text-xs font-mono font-semibold text-violet-300 tracking-wider">AGENT STATUS</h2>
+          </div>
+          <div className="divide-y divide-white/[0.03]">
+            {agents.slice(0, 8).map((a: any, i: number) => (
+              <div key={i} className="px-5 py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${a.status === "Available" || a.status === "available" ? "bg-emerald-500 animate-pulse" : a.status === "Busy" ? "bg-amber-500" : "bg-slate-600"}`} />
+                  <span className="text-sm text-slate-300">{a.name}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {a.extension && <span className="text-[10px] font-mono text-slate-600">x{a.extension}</span>}
+                  <span className="text-[10px] font-mono text-slate-500">{a.status}</span>
+                </div>
+              </div>
+            ))}
+            {agents.length === 0 && (
+              <div className="px-5 py-6 text-center text-sm text-slate-600">No agents configured</div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Recent Calls + Services */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="lg:col-span-2 bg-[#0f1629] border-cyan-500/10 glow-border">
+          <div className="px-5 py-3.5 border-b border-cyan-500/10">
+            <h2 className="text-xs font-mono font-semibold text-slate-300 tracking-wider">RECENT CALLS</h2>
+          </div>
+          <div className="divide-y divide-white/[0.03]">
+            {recentCalls.map((c: any, i: number) => (
+              <div key={i} className="px-5 py-3 flex items-start gap-4 hover:bg-cyan-500/[0.02]">
+                <span className="font-mono text-[10px] text-slate-500 mt-1 w-12 shrink-0">
+                  {c.start_time ? new Date(c.start_time).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" }) : "—"}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="font-mono text-sm text-slate-300">{c.caller_number || "—"}</span>
+                    <Badge variant="outline" className={`text-[9px] font-mono ${sentimentColor[c.sentiment] || sentimentColor.neutral}`}>
+                      {c.sentiment || "—"}
+                    </Badge>
+                    <Badge variant="outline" className={`text-[9px] font-mono ${modeStyle[c.mode] || ""}`}>
+                      {c.mode || "—"}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-slate-500 truncate">{c.summary || "No summary"}</p>
+                </div>
+                <span className="font-mono text-xs text-slate-600 shrink-0">{formatDuration(c.duration)}</span>
+              </div>
+            ))}
+            {recentCalls.length === 0 && (
+              <div className="px-5 py-6 text-center text-sm text-slate-600">No calls yet</div>
+            )}
+          </div>
+        </Card>
+
+        {/* Service Health */}
+        <Card className="bg-[#0f1629] border-cyan-500/10 overflow-hidden">
+          <div className="px-5 py-3.5 border-b border-cyan-500/10">
+            <h2 className="text-xs font-mono font-semibold text-slate-300 tracking-wider">SERVICES</h2>
+          </div>
+          <div className="divide-y divide-white/[0.03]">
+            {services.map((s: any, i: number) => (
+              <div key={i} className="px-5 py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${s.status === "online" ? "bg-emerald-500" : "bg-rose-500"}`} />
+                  <span className="text-sm text-slate-300">{s.name}</span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-600">{s.port}</span>
+              </div>
+            ))}
+            {services.length === 0 && (
+              <div className="px-5 py-6 text-center text-sm text-slate-600">Loading services...</div>
+            )}
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }
