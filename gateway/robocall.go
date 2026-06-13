@@ -38,11 +38,47 @@ type BlocklistEntry struct {
 }
 
 type RobocallDetector struct {
-	blocklist map[string]string // number → reason
-	mu        sync.RWMutex
-	db        *sql.DB
-	threshold float64
-	autoBlock bool
+	blocklist      map[string]string // number → reason
+	customKeywords []struct{ phrase string; weight float64 }
+	mu             sync.RWMutex
+	db             *sql.DB
+	threshold      float64
+	autoBlock      bool
+}
+
+func (d *RobocallDetector) AddKeyword(phrase string, weight float64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.customKeywords = append(d.customKeywords, struct{ phrase string; weight float64 }{phrase, weight})
+}
+
+func (d *RobocallDetector) RemoveKeyword(phrase string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	filtered := d.customKeywords[:0]
+	for _, kw := range d.customKeywords {
+		if kw.phrase != phrase {
+			filtered = append(filtered, kw)
+		}
+	}
+	d.customKeywords = filtered
+}
+
+func (d *RobocallDetector) ListKeywords() []CustomRobocallKeyword {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	var result []CustomRobocallKeyword
+	for _, kw := range robocallKeywords {
+		result = append(result, CustomRobocallKeyword{
+			Phrase: kw.phrase, Weight: kw.weight, Category: "built-in", Enabled: true, IsDefault: true,
+		})
+	}
+	for _, kw := range d.customKeywords {
+		result = append(result, CustomRobocallKeyword{
+			Phrase: kw.phrase, Weight: kw.weight, Category: "custom", Enabled: true, IsDefault: false,
+		})
+	}
+	return result
 }
 
 func NewRobocallDetector(db *sql.DB) *RobocallDetector {
@@ -282,6 +318,14 @@ func (d *RobocallDetector) ClassifyTranscript(text string) *RobocallResult {
 			matched = append(matched, kw.phrase)
 		}
 	}
+	d.mu.RLock()
+	for _, kw := range d.customKeywords {
+		if strings.Contains(lower, kw.phrase) {
+			score += kw.weight
+			matched = append(matched, kw.phrase)
+		}
+	}
+	d.mu.RUnlock()
 
 	if score > 1.0 {
 		score = 1.0

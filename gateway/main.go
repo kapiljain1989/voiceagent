@@ -249,6 +249,9 @@ func main() {
 	gw.security = NewSecurityHandler(api.db)
 	gw.security.RegisterRoutes(mux)
 
+	secRules := NewSecurityRulesManager(gw.security.masker, gw.robocall, gw.security.biometrics)
+	secRules.RegisterRoutes(mux)
+
 	failover := NewFailoverManager(gw)
 	mux.HandleFunc("/api/failover/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, failover.Status())

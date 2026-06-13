@@ -8,19 +8,24 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { authFetch } from "@/lib/auth";
 
-const PII_PATTERNS = [
-  { name: "Credit Card", type: "credit_card", level: "critical" },
-  { name: "SSN", type: "ssn", level: "critical" },
-  { name: "CVV", type: "cvv", level: "critical" },
-  { name: "Date of Birth", type: "dob", level: "high" },
-  { name: "DOB (compact)", type: "dob_compact", level: "high" },
-  { name: "DOB (spoken)", type: "dob_spoken", level: "high" },
-  { name: "Account Number", type: "account_number", level: "high" },
-  { name: "Card (spoken)", type: "credit_card_spoken", level: "critical" },
-  { name: "SSN (spoken)", type: "ssn_spoken", level: "critical" },
-];
+interface PIIRule { name: string; regex: string; mask: string; level: string; is_default: boolean; }
+interface RobocallKeyword { phrase: string; weight: number; category: string; is_default: boolean; }
+interface BioConfig { key: string; value: string; }
 
 export default function SecurityPage() {
+  // Dynamic rules from API
+  const [piiRules, setPiiRules] = useState<PIIRule[]>([]);
+  const [robocallKeywords, setRobocallKeywords] = useState<RobocallKeyword[]>([]);
+  const [bioConfig, setBioConfig] = useState<BioConfig[]>([]);
+
+  // Add PII pattern form
+  const [showAddPII, setShowAddPII] = useState(false);
+  const [newPII, setNewPII] = useState({ name: "", regex: "", mask: "[REDACTED]", level: "high" });
+
+  // Add robocall keyword form
+  const [showAddKeyword, setShowAddKeyword] = useState(false);
+  const [newKeyword, setNewKeyword] = useState({ phrase: "", weight: 1.0, category: "spam" });
+
   // Robocall
   const [blockNumber, setBlockNumber] = useState("");
   const [blockReason, setBlockReason] = useState("");
@@ -45,7 +50,41 @@ export default function SecurityPage() {
     loadBlocklist();
     loadRobocallStats();
     loadVoiceprints();
+    loadPIIRules();
+    loadRobocallKeywords();
+    loadBioConfig();
   }, []);
+
+  async function loadPIIRules() {
+    try { const res = await authFetch("/api/security/rules/pii"); if (res.ok) setPiiRules(await res.json()); } catch {}
+  }
+  async function addPIIRule() {
+    if (!newPII.name || !newPII.regex) return;
+    await authFetch("/api/security/rules/pii", { method: "POST", body: JSON.stringify(newPII) });
+    setNewPII({ name: "", regex: "", mask: "[REDACTED]", level: "high" }); setShowAddPII(false); loadPIIRules();
+  }
+  async function removePIIRule(name: string) {
+    await authFetch("/api/security/rules/pii", { method: "DELETE", body: JSON.stringify({ name }) }); loadPIIRules();
+  }
+
+  async function loadRobocallKeywords() {
+    try { const res = await authFetch("/api/security/rules/robocall"); if (res.ok) setRobocallKeywords(await res.json()); } catch {}
+  }
+  async function addRobocallKeyword() {
+    if (!newKeyword.phrase) return;
+    await authFetch("/api/security/rules/robocall", { method: "POST", body: JSON.stringify(newKeyword) });
+    setNewKeyword({ phrase: "", weight: 1.0, category: "spam" }); setShowAddKeyword(false); loadRobocallKeywords();
+  }
+  async function removeRobocallKeyword(phrase: string) {
+    await authFetch("/api/security/rules/robocall", { method: "DELETE", body: JSON.stringify({ phrase }) }); loadRobocallKeywords();
+  }
+
+  async function loadBioConfig() {
+    try { const res = await authFetch("/api/security/rules/biometric"); if (res.ok) setBioConfig(await res.json()); } catch {}
+  }
+  async function saveBioConfig(key: string, value: string) {
+    await authFetch("/api/security/rules/biometric", { method: "POST", body: JSON.stringify({ key, value }) }); loadBioConfig();
+  }
 
   async function loadBlocklist() {
     try { const res = await authFetch("/api/blocklist"); if (res.ok) setBlocklist(await res.json()); } catch {}
@@ -123,7 +162,7 @@ export default function SecurityPage() {
         </Card>
         <Card className="bg-[#0f1629] border-amber-500/10 p-4 text-center">
           <div className="text-[10px] font-mono text-slate-500 mb-1">PII PATTERNS</div>
-          <div className="font-mono text-2xl text-amber-400">9</div>
+          <div className="font-mono text-2xl text-amber-400">{piiRules.length || 9}</div>
         </Card>
         <Card className="bg-[#0f1629] border-amber-500/10 p-4 text-center">
           <div className="text-[10px] font-mono text-slate-500 mb-1">PII ENGINE</div>
@@ -204,28 +243,93 @@ export default function SecurityPage() {
               <p className="text-sm text-slate-600 text-center py-4">Blocklist empty. Add numbers above to block known spam callers.</p>
             )}
           </Card>
+          {/* Robocall Keywords */}
+          <Card className="bg-[#0f1629] border-rose-500/10 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-slate-200 tracking-wide">DETECTION KEYWORDS ({robocallKeywords.length})</h3>
+              <div className="flex gap-2">
+                <Button onClick={() => setShowAddKeyword(!showAddKeyword)} variant="outline" className="font-mono text-xs text-rose-400 border-rose-500/20">
+                  {showAddKeyword ? "CANCEL" : "+ ADD KEYWORD"}
+                </Button>
+                <Button onClick={loadRobocallKeywords} variant="outline" className="font-mono text-xs text-slate-400 border-cyan-500/20">REFRESH</Button>
+              </div>
+            </div>
+            {showAddKeyword && (
+              <div className="mb-4 p-3 rounded bg-rose-500/[0.03] border border-rose-500/10">
+                <div className="flex gap-2">
+                  <Input placeholder="Keyword phrase" value={newKeyword.phrase} onChange={(e) => setNewKeyword({...newKeyword, phrase: e.target.value})}
+                    className="bg-[#070b14] border-rose-500/15 text-slate-200 font-mono text-sm flex-1" />
+                  <Input type="number" step="0.1" placeholder="Weight" value={newKeyword.weight} onChange={(e) => setNewKeyword({...newKeyword, weight: parseFloat(e.target.value) || 1.0})}
+                    className="bg-[#070b14] border-rose-500/15 text-slate-200 font-mono text-sm w-20" />
+                  <Button onClick={addRobocallKeyword} className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs px-4">ADD</Button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {robocallKeywords.map((kw, i) => (
+                <div key={i} className="group flex items-center gap-1 px-2 py-1 rounded bg-[#070b14] border border-rose-500/10">
+                  <span className="font-mono text-xs text-slate-400">{kw.phrase}</span>
+                  <span className="font-mono text-[9px] text-slate-600">({kw.weight})</span>
+                  {!kw.is_default && (
+                    <button onClick={() => removeRobocallKeyword(kw.phrase)} className="text-rose-500/50 hover:text-rose-400 ml-0.5 hidden group-hover:inline">x</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
         </TabsContent>
 
         {/* PII Masking */}
         <TabsContent value="pii" className="space-y-4">
           <Card className="bg-[#0f1629] border-amber-500/15 p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-slate-200 tracking-wide">PII MASKING ENGINE — 9 PATTERNS</h3>
-              <Button onClick={togglePII} variant="outline" className={`font-mono text-xs ${piiEnabled ? "text-emerald-400 border-emerald-500/30" : "text-rose-400 border-rose-500/30"}`}>
-                {piiEnabled ? "ENABLED" : "DISABLED"}
-              </Button>
+              <h3 className="text-sm font-semibold text-slate-200 tracking-wide">PII MASKING ENGINE — {piiRules.length} PATTERNS</h3>
+              <div className="flex gap-2">
+                <Button onClick={() => setShowAddPII(!showAddPII)} variant="outline" className="font-mono text-xs text-amber-400 border-amber-500/20">
+                  {showAddPII ? "CANCEL" : "+ ADD PATTERN"}
+                </Button>
+                <Button onClick={togglePII} variant="outline" className={`font-mono text-xs ${piiEnabled ? "text-emerald-400 border-emerald-500/30" : "text-rose-400 border-rose-500/30"}`}>
+                  {piiEnabled ? "ENABLED" : "DISABLED"}
+                </Button>
+              </div>
             </div>
-            <div className="grid grid-cols-3 md:grid-cols-5 gap-2 mb-4">
-              {PII_PATTERNS.map((p) => (
-                <div key={p.type} className="p-2 rounded bg-[#070b14] text-center">
-                  <Badge variant="outline" className={`text-[9px] font-mono ${p.level === "critical" ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"}`}>
-                    {p.name}
-                  </Badge>
-                  <div className="text-[9px] font-mono text-slate-600 mt-1">{p.level}</div>
+            {showAddPII && (
+              <div className="mb-4 p-3 rounded bg-amber-500/[0.03] border border-amber-500/10">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                  <Input placeholder="Pattern name" value={newPII.name} onChange={(e) => setNewPII({...newPII, name: e.target.value})}
+                    className="bg-[#070b14] border-amber-500/15 text-slate-200 font-mono text-sm" />
+                  <Input placeholder="Regex (e.g. \b\d{10}\b)" value={newPII.regex} onChange={(e) => setNewPII({...newPII, regex: e.target.value})}
+                    className="bg-[#070b14] border-amber-500/15 text-slate-200 font-mono text-sm" />
+                  <Input placeholder="Mask text" value={newPII.mask} onChange={(e) => setNewPII({...newPII, mask: e.target.value})}
+                    className="bg-[#070b14] border-amber-500/15 text-slate-200 font-mono text-sm" />
+                  <div className="flex gap-2">
+                    <select value={newPII.level} onChange={(e) => setNewPII({...newPII, level: e.target.value})}
+                      className="bg-[#070b14] border border-amber-500/15 rounded-md text-slate-200 font-mono text-sm px-2 flex-1">
+                      <option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option>
+                    </select>
+                    <Button onClick={addPIIRule} className="bg-amber-600 hover:bg-amber-500 text-white font-mono text-xs px-4">ADD</Button>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="space-y-1">
+              {piiRules.map((p) => (
+                <div key={p.name} className="flex items-center justify-between p-2 rounded bg-[#070b14]">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className={`text-[9px] font-mono ${p.level === "critical" ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20"}`}>
+                      {p.level}
+                    </Badge>
+                    <span className="font-mono text-sm text-slate-300">{p.name}</span>
+                    {p.is_default && <Badge variant="outline" className="text-[8px] font-mono bg-slate-500/10 text-slate-500">BUILT-IN</Badge>}
+                    <span className="font-mono text-[10px] text-slate-600 hidden md:inline">{p.mask}</span>
+                  </div>
+                  {!p.is_default && (
+                    <Button onClick={() => removePIIRule(p.name)} variant="ghost" className="text-xs text-rose-400 hover:text-rose-300 font-mono">REMOVE</Button>
+                  )}
                 </div>
               ))}
+              {piiRules.length === 0 && <p className="text-sm text-slate-600 text-center py-2">Loading patterns...</p>}
             </div>
-            <p className="text-xs text-slate-600">Patterns run on every Whisper transcript before text reaches the LLM or gets recorded. Supports numeric, dashed, spaced, and spoken digit formats.</p>
           </Card>
 
           <Card className="bg-[#0f1629] border-cyan-500/10 glow-border p-5">
@@ -270,6 +374,20 @@ export default function SecurityPage() {
           <Card className="bg-[#0f1629] border-violet-500/15 p-5">
             <h3 className="text-sm font-semibold text-violet-300 tracking-wide mb-2">VOICE BIOMETRICS</h3>
             <p className="text-xs text-slate-600 mb-4">32-dimensional spectral fingerprint from raw PCM audio. Fraud profiles are matched during live calls. Verified profiles authenticate callers.</p>
+
+            {/* Biometric Config */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {bioConfig.map((c) => (
+                <div key={c.key} className="p-3 rounded bg-[#070b14]">
+                  <div className="text-[10px] font-mono text-slate-500 mb-1">{c.key.replace(/_/g, " ").toUpperCase()}</div>
+                  <Input value={c.value}
+                    onChange={(e) => setBioConfig(prev => prev.map(p => p.key === c.key ? {...p, value: e.target.value} : p))}
+                    onBlur={(e) => saveBioConfig(c.key, e.target.value)}
+                    className="bg-[#070b14] border-violet-500/15 text-violet-300 font-mono text-sm h-8" />
+                </div>
+              ))}
+              {bioConfig.length === 0 && <p className="text-xs text-slate-600 col-span-4">No biometric config. Database required.</p>}
+            </div>
           </Card>
 
           <Card className="bg-[#0f1629] border-violet-500/15 p-5">

@@ -51,6 +51,7 @@ func (d *Database) RunMigrations() error {
 	files := []string{
 		"migrations/001_initial_schema.up.sql",
 		"migrations/002_seed_data.up.sql",
+		"migrations/003_custom_security_rules.up.sql",
 	}
 
 	for _, f := range files {
