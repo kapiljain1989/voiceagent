@@ -232,7 +232,7 @@ func main() {
 		admission:   NewAdmissionController(500),
 	}
 
-	configStore := NewConfigStore(envOr("CONFIG_FILE", "./config.json"), &cfg)
+	configStore := NewConfigStore(envOr("CONFIG_FILE", "/app/config/config.json"), &cfg)
 
 	mux := http.NewServeMux()
 	api := NewAPIHandler(gw)
@@ -283,6 +283,11 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","sessions":%d,"mode":"%s"}`, gw.sessions.Load(), cfg.Mode)
+	})
+	mux.HandleFunc("/api/services/status", func(w http.ResponseWriter, r *http.Request) {
+		services := checkServiceHealth(&cfg)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(services)
 	})
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1516,4 +1521,112 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+type ServiceStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Port   string `json:"port"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func checkServiceHealth(cfg *Config) []ServiceStatus {
+	var services []ServiceStatus
+
+	services = append(services, ServiceStatus{
+		Name: "Gateway", Status: "online", Port: cfg.ListenAddr, Detail: cfg.Mode + " mode",
+	})
+
+	// Whisper STT
+	if probeHTTP(cfg.STTURL) {
+		services = append(services, ServiceStatus{Name: "Whisper STT", Status: "online", Port: ":8000"})
+	} else {
+		services = append(services, ServiceStatus{Name: "Whisper STT", Status: "offline", Port: ":8000"})
+	}
+
+	// Piper TTS
+	if cfg.Mode == "gateway" {
+		if probeHTTP(cfg.TTSURL) {
+			services = append(services, ServiceStatus{Name: "Piper TTS", Status: "online", Port: ":5000"})
+		} else {
+			services = append(services, ServiceStatus{Name: "Piper TTS", Status: "offline", Port: ":5000"})
+		}
+	}
+
+	// PostgreSQL
+	if database != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := database.DB().PingContext(ctx); err == nil {
+			services = append(services, ServiceStatus{Name: "PostgreSQL", Status: "online", Port: ":5432"})
+		} else {
+			services = append(services, ServiceStatus{Name: "PostgreSQL", Status: "offline", Port: ":5432", Detail: err.Error()})
+		}
+	} else {
+		services = append(services, ServiceStatus{Name: "PostgreSQL", Status: "not configured", Port: ":5432"})
+	}
+
+	// Redis
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL != "" {
+		if probeTCP(redisURL) {
+			services = append(services, ServiceStatus{Name: "Redis", Status: "online", Port: ":6379"})
+		} else {
+			services = append(services, ServiceStatus{Name: "Redis", Status: "offline", Port: ":6379"})
+		}
+	}
+
+	// ChromaDB
+	if cfg.ChromaURL != "" {
+		if probeHTTP(cfg.ChromaURL + "/api/v2/heartbeat") {
+			services = append(services, ServiceStatus{Name: "ChromaDB", Status: "online", Port: ":8000"})
+		} else {
+			services = append(services, ServiceStatus{Name: "ChromaDB", Status: "offline", Port: ":8000"})
+		}
+	}
+
+	// FreeSWITCH ESL (gateway mode only)
+	if cfg.Mode == "gateway" {
+		if probeTCP(cfg.ESLHost + ":" + cfg.ESLPort) {
+			services = append(services, ServiceStatus{Name: "FreeSWITCH", Status: "online", Port: ":" + cfg.ESLPort})
+		} else {
+			services = append(services, ServiceStatus{Name: "FreeSWITCH", Status: "offline", Port: ":" + cfg.ESLPort})
+		}
+	}
+
+	// SIP server (standalone mode)
+	if cfg.SIPListenAddr != "" {
+		services = append(services, ServiceStatus{Name: "SIP Server", Status: "online", Port: cfg.SIPListenAddr})
+	}
+
+	return services
+}
+
+func probeHTTP(url string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
+}
+
+func probeTCP(addr string) bool {
+	if !strings.Contains(addr, ":") {
+		return false
+	}
+	// Strip protocol prefix
+	addr = strings.TrimPrefix(addr, "redis://")
+	addr = strings.TrimPrefix(addr, "tcp://")
+	// Remove path
+	if idx := strings.Index(addr, "/"); idx > 0 {
+		addr = addr[:idx]
+	}
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

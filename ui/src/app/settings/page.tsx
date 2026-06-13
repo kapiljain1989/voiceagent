@@ -51,15 +51,9 @@ export default function SettingsPage() {
 
   async function loadServices() {
     try {
-      const gw = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
-      const res = await fetch(`${gw}/healthz`);
+      const res = await authFetch("/api/services/status");
       if (res.ok) {
-        const h = await res.json();
-        setServices([
-          { name: "Gateway", status: "online", port: `:8080 (${h.mode || "gateway"})` },
-          { name: "Whisper STT", status: "online", port: ":8000" },
-          { name: "Database", status: "online", port: ":5432" },
-        ]);
+        setServices(await res.json());
       }
     } catch {
       setServices([{ name: "Gateway", status: "offline", port: ":8080" }]);
