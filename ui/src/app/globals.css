@@ -144,7 +144,7 @@
   border-left-color: #10b981;
 }
 
-/* Sidebar collapse — adjust main content margin */
+/* Sidebar collapse — icons-only mode */
 html[data-sidebar-collapsed="true"] .main-content {
-  margin-left: 0 !important;
+  margin-left: 4rem !important;
 }
