@@ -52,6 +52,7 @@ import {
 import { StatusDot, ConsoleBadge, IconBtn } from "@/components/console/Primitives";
 import { WebRTCHealth } from "@/components/console/WebRTCHealth";
 import { DialPad } from "@/components/console/DialPad";
+import { useWebRTC } from "@/hooks/useWebRTC";
 import { TransferPanel } from "@/components/console/TransferPanel";
 import { QueueMonitor } from "@/components/console/QueueMonitor";
 import { AgentDirectory } from "@/components/console/AgentDirectory";
@@ -159,7 +160,10 @@ const STATE_DISPLAY: Record<CallState, { label: string; color: string }> = {
 };
 
 export default function ConsolePage() {
-  // Core state
+  // WebRTC hook for real calling
+  const webrtc = useWebRTC();
+
+  // Core state — synced with WebRTC when active
   const [callState, setCallState] = useState<CallState>("idle");
   const [callId, setCallId] = useState<string | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentStatus>("Available");
@@ -295,17 +299,46 @@ export default function ConsolePage() {
     setConferenceParty(null);
   }
 
-  // ── Call actions ──
-  function handleDial() {
+  // ── Sync WebRTC state → local state ──
+  useEffect(() => {
+    setCallState(webrtc.callState);
+    if (webrtc.callId) setCallId(webrtc.callId);
+  }, [webrtc.callState, webrtc.callId]);
+
+  // ── SSE stream for real transcripts/copilot when WebRTC call is active ──
+  const sseStream = useSSEStream(webrtc.callState === "connected" ? webrtc.callId : null);
+  useEffect(() => {
+    if (sseStream.transcripts.length > 0) {
+      setTranscriptEntries(sseStream.transcripts);
+    }
+    if (sseStream.suggestions.length > 0) {
+      setCopilotSuggestions(sseStream.suggestions);
+    }
+    if (sseStream.summary?.voice_sentiment) {
+      setVoiceSentiment(sseStream.summary.voice_sentiment);
+    }
+    if (sseStream.summary) {
+      setShowPostCallSummary(true);
+    }
+  }, [sseStream.transcripts, sseStream.suggestions, sseStream.summary]);
+
+  // ── Call actions — use WebRTC for real calls, fallback to mock ──
+  async function handleDial() {
     if (!phoneNumber) return;
-    setCallState("dialing");
     setCallDuration(0);
     resetCallData();
-    setTimeout(() => setCallState("connected"), 2200);
+    try {
+      await webrtc.dial(phoneNumber, "console-agent");
+    } catch {
+      // Fallback to mock simulation
+      setCallState("dialing");
+      setTimeout(() => setCallState("connected"), 2200);
+    }
   }
 
   function handleEndCall() {
     setFinalCallDuration(callDuration);
+    webrtc.hangup();
     setCallState("disconnected");
     setConferenceActive(false);
     setConferenceParty(null);
@@ -319,17 +352,30 @@ export default function ConsolePage() {
   }
 
   function handleMute() {
-    if (callState === "muted") setCallState("connected");
-    else if (callState === "connected") setCallState("muted");
+    if (callState === "muted") {
+      webrtc.unmute();
+      setCallState("connected");
+    } else if (callState === "connected") {
+      webrtc.mute();
+      setCallState("muted");
+    }
   }
 
   function handleHold() {
-    if (callState === "hold") setCallState("connected");
-    else if (callState === "connected" || callState === "muted") setCallState("hold");
+    if (callState === "hold") {
+      if (callId) resumeCall(callId);
+      setCallState("connected");
+    } else if (callState === "connected" || callState === "muted") {
+      if (callId) holdCall(callId);
+      setCallState("hold");
+    }
   }
 
   function handleDigit(d: string) {
     setPhoneNumber((prev) => prev + d);
+    if (isCallActive) {
+      webrtc.sendDTMF(d);
+    }
   }
 
   function handleBlindTransfer(target: string) {

@@ -258,6 +258,9 @@ func main() {
 	mux.HandleFunc("/siprec/events", gw.handleEvents)
 	mux.HandleFunc("/siprec/summary", gw.handleSummaryQuery)
 	mux.HandleFunc("/api/copilot/active", gw.handleActiveCopilot)
+
+	webrtcMgr := NewWebRTCManager(gw)
+	webrtcMgr.RegisterRoutes(mux)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","sessions":%d,"mode":"%s"}`, gw.sessions.Load(), cfg.Mode)
