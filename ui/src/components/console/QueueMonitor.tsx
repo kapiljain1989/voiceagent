@@ -101,14 +101,13 @@ export function QueueMonitor({
               <div className="border-t border-white/[0.04] animate-[slide-up_0.3s_ease-out]">
                 {[...q.callers]
                   .sort((a, b) => {
-                    // Priority first (high before normal), then by ID (stable order)
                     const priOrder: Record<string, number> = { high: 0, normal: 1, low: 2 };
                     const pa = priOrder[a.priority] ?? 1;
                     const pb = priOrder[b.priority] ?? 1;
                     if (pa !== pb) return pa - pb;
                     return a.id.localeCompare(b.id);
                   })
-                  .map((caller) => {
+                  .map((caller, idx) => {
                     const waitColor =
                       caller.waitSec > 300
                         ? "text-rose-400"
@@ -126,6 +125,7 @@ export function QueueMonitor({
                         key={caller.id}
                         className="px-3 py-2 flex items-center gap-2 border-b border-white/[0.02] last:border-0 group hover:bg-white/[0.02] transition-colors"
                       >
+                        <span className="w-5 text-[10px] font-mono text-slate-600 shrink-0 text-center">{idx + 1}</span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-0.5">
                             <span className="text-[11px] font-mono text-slate-300">
