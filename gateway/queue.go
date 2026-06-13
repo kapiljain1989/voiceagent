@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 )
@@ -138,6 +139,9 @@ func (qm *QueueManager) handleListQueues(w http.ResponseWriter, r *http.Request)
 		})
 	}
 	qm.mu.Unlock()
+
+	// Sort by name for stable order
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 
 	writeJSON(w, http.StatusOK, result)
 }
