@@ -232,10 +232,13 @@ func main() {
 		admission:   NewAdmissionController(500),
 	}
 
+	configStore := NewConfigStore(envOr("CONFIG_FILE", "./config.json"), &cfg)
+
 	mux := http.NewServeMux()
 	api := NewAPIHandler(gw)
 	gw.api = api
 	api.RegisterRoutes(mux)
+	configStore.RegisterRoutes(mux)
 
 	gw.robocall = NewRobocallDetector(api.db)
 	gw.robocall.RegisterRoutes(mux)
