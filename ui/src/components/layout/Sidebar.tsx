@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { getUser, logout } from "@/lib/auth";
 
 const nav = [
   { href: "/", label: "Command", icon: "grid", shortcut: "D" },
@@ -171,12 +172,61 @@ export function Sidebar() {
           })}
         </nav>
 
-        {/* Status */}
-        <div className="px-3 py-3 border-t border-cyan-500/10">
-          <div className={`flex items-center gap-2 text-xs font-mono text-slate-600 ${expanded ? "" : "justify-center"}`}>
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+        {/* User + Status */}
+        <div className="border-t border-cyan-500/10">
+          {/* System status */}
+          <div className={`px-3 py-2 flex items-center gap-2 text-xs font-mono text-slate-600 ${expanded ? "" : "justify-center"}`}>
+            <span className="w-2 h-2 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
             {expanded && <span>SYS ONLINE</span>}
           </div>
+
+          {/* User info + logout */}
+          {(() => {
+            const user = getUser();
+            if (!user) return null;
+            return (
+              <div className={`px-3 py-3 border-t border-cyan-500/[0.06] ${expanded ? "" : "flex justify-center"}`}>
+                {expanded ? (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 shrink-0 rounded-full bg-cyan-500/15 flex items-center justify-center">
+                        <span className="text-[10px] font-mono font-semibold text-cyan-400">
+                          {user.username.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-mono text-slate-300 truncate">{user.username}</div>
+                        <div className="text-[10px] font-mono text-slate-600">{user.role}</div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={logout}
+                      title="Logout"
+                      className="shrink-0 w-7 h-7 flex items-center justify-center rounded text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={logout}
+                    title="Logout"
+                    className="w-8 h-8 flex items-center justify-center rounded text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </aside>
     </>
