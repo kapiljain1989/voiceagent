@@ -246,6 +246,12 @@ func main() {
 		})
 	})
 
+	gw.registerCallControlRoutes(mux)
+	queueMgr := NewQueueManager(gw)
+	queueMgr.RegisterRoutes(mux)
+	agentMgr := NewAgentManager()
+	agentMgr.RegisterRoutes(mux)
+
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
 	mux.HandleFunc("/siprec", gw.handleSIPREC)

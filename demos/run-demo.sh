@@ -47,8 +47,9 @@ case "$1" in
       -d "{\"query\":\"$2\"}" | python3 -m json.tool
     ;;
   doc-list)
-    curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/documents | \
-      python3 -c "import sys,json; [print(f'  {d[\"name\"]} ({d[\"category\"]})') for d in json.load(sys.stdin)]"
+    curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:8080/api/documents/search \
+      -d '{"query":"policy FAQ procedure"}' | \
+      python3 -c "import sys,json; results=json.load(sys.stdin); [print(f'  {r.get(\"doc_name\",\"doc\")} — {r[\"text\"][:60]}...') for r in results[:5]]" 2>/dev/null || echo "  No documents indexed"
     ;;
   stats)
     curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/stats | python3 -m json.tool
@@ -86,7 +87,7 @@ case "$1" in
     kubectl -n voiceagent get pods -o wide 2>/dev/null || echo "No K8s cluster running"
     ;;
   config)
-    curl -s http://localhost:8080/api/config | python3 -m json.tool
+    curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/config | python3 -m json.tool
     ;;
   copilot-active)
     curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/copilot/active | python3 -c "

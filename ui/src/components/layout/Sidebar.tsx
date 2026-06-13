@@ -8,6 +8,7 @@ const nav = [
   { href: "/agents", label: "Agents", icon: "users", shortcut: "A" },
   { href: "/calls", label: "Calls", icon: "phone", shortcut: "C" },
   { href: "/calls/live", label: "Live Ops", icon: "radio", shortcut: "L" },
+  { href: "/console", label: "Console", icon: "headset", shortcut: "O" },
   { href: "/documents", label: "Knowledge", icon: "file", shortcut: "K" },
   { href: "/security", label: "Security", icon: "shield", shortcut: "X" },
   { href: "/infrastructure", label: "Infra", icon: "server", shortcut: "I" },
@@ -61,6 +62,12 @@ const icons: Record<string, React.ReactNode> = {
       <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
       <line x1="6" y1="6" x2="6.01" y2="6" />
       <line x1="6" y1="18" x2="6.01" y2="18" />
+    </svg>
+  ),
+  headset: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+      <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
     </svg>
   ),
   sliders: (
