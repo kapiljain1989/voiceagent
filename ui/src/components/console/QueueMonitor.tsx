@@ -100,7 +100,14 @@ export function QueueMonitor({
             {isExpanded && q.callers.length > 0 && (
               <div className="border-t border-white/[0.04] animate-[slide-up_0.3s_ease-out]">
                 {[...q.callers]
-                  .sort((a, b) => b.waitSec - a.waitSec)
+                  .sort((a, b) => {
+                    // Priority first (high before normal), then by ID (stable order)
+                    const priOrder: Record<string, number> = { high: 0, normal: 1, low: 2 };
+                    const pa = priOrder[a.priority] ?? 1;
+                    const pb = priOrder[b.priority] ?? 1;
+                    if (pa !== pb) return pa - pb;
+                    return a.id.localeCompare(b.id);
+                  })
                   .map((caller) => {
                     const waitColor =
                       caller.waitSec > 300
