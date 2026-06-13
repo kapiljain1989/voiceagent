@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +62,7 @@ func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
 	}
 
 	server.OnInvite(s.handleInvite)
+	server.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {})
 	server.OnBye(s.handleBye)
 	server.OnOptions(s.handleOptions)
 
@@ -155,6 +157,7 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// Allocate local RTP port
 	localPort := s.allocateRTPPort()
 	localIP := getLocalIP()
+	slog.Info("SDP answer IP", "local_ip", localIP, "local_rtp", localPort)
 
 	// Create RTP listener
 	ctx, cancel := context.WithCancel(context.Background())
@@ -207,19 +210,40 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		cancelFunc: cancel,
 	}
 
+	// Set remote RTP address for sending agent audio back
+	listener.SetRemoteAddr(remoteAddr, remotePort)
+
+	// Store RTP session reference on copilot for WebRTC bridge
+	copilot.rtpSession = sess
+
 	s.sessMu.Lock()
 	s.sessions[callID+"_"+role] = sess
 	s.sessMu.Unlock()
 
-	// Start RTP receiver → feed into copilot pipeline
+	// Start RTP receiver → feed into copilot pipeline + audio taps
 	pcmCh := copilot.pcmCaller
 	if role == "agent" {
 		pcmCh = copilot.pcmAgent
 	}
 
-	go listener.ReceiveAndDecode(ctx, pcmCh, role, callID)
+	go listener.ReceiveAndDecode(ctx, pcmCh, role, callID, copilot)
 
-	slog.Info("SIPREC session started",
+	// Auto-add to queue for Console visibility
+	if role == "caller" && s.gw.queueMgr != nil {
+		callerNum := copilot.callerNumber
+		if callerNum == "" {
+			callerNum = callID[:12]
+		}
+		s.gw.queueMgr.AddCaller("Support", queueEntry{
+			ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
+			CallID:   callID,
+			Number:   callerNum,
+			Reason:   "Incoming call",
+			Priority: "normal",
+		})
+	}
+
+	slog.Info("SIP session started",
 		"call_id", callID,
 		"role", role,
 		"remote", fmt.Sprintf("%s:%d", remoteAddr, remotePort),
@@ -230,10 +254,16 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// Build SDP answer
 	sdpAnswer := buildSDPAnswer(localIP, localPort, codec)
 
+	slog.Info("SDP answer", "sdp", sdpAnswer)
+
 	// Send 200 OK with SDP
 	okResp := sip.NewResponseFromRequest(req, 200, "OK", []byte(sdpAnswer))
 	okResp.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
-	tx.Respond(okResp)
+	if err := tx.Respond(okResp); err != nil {
+		slog.Error("failed to send 200 OK", "err", err, "call_id", callID)
+	} else {
+		slog.Info("200 OK sent", "call_id", callID)
+	}
 }
 
 func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
@@ -247,10 +277,19 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 			if sess.listener != nil {
 				sess.listener.Close()
 			}
+			// Cancel the copilot session
+			if sess.copilot != nil {
+				sess.copilot.cancel()
+			}
 			delete(s.sessions, key)
 		}
 	}
 	s.sessMu.Unlock()
+
+	// Remove from queue
+	if s.gw.queueMgr != nil {
+		s.gw.queueMgr.RemoveCallerByCallID(callID)
+	}
 
 	okResp := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	tx.Respond(okResp)
@@ -306,15 +345,18 @@ func buildSDPAnswer(localIP string, localPort int, codec string) string {
 		codecName = "PCMA"
 	}
 
-	return fmt.Sprintf(`v=0
-o=VoiceAgent %d %d IN IP4 %s
-s=SIPREC Session
-c=IN IP4 %s
-t=0 0
-m=audio %d RTP/AVP %s
-a=rtpmap:%s %s/8000
-a=recvonly
-`, time.Now().UnixMilli(), time.Now().UnixMilli(), localIP,
+	return fmt.Sprintf("v=0\r\n"+
+		"o=VoiceAgent %d %d IN IP4 %s\r\n"+
+		"s=VoiceAgent\r\n"+
+		"c=IN IP4 %s\r\n"+
+		"t=0 0\r\n"+
+		"m=audio %d RTP/AVP %s 101\r\n"+
+		"a=rtpmap:%s %s/8000\r\n"+
+		"a=rtpmap:101 telephone-event/8000\r\n"+
+		"a=fmtp:101 0-16\r\n"+
+		"a=sendrecv\r\n"+
+		"a=ptime:20\r\n",
+		time.Now().UnixMilli(), time.Now().UnixMilli(), localIP,
 		localIP, localPort, pt, pt, codecName)
 }
 
@@ -362,6 +404,13 @@ func parseMultipartBody(body, contentType string) (sdpPart, xmlPart string) {
 }
 
 func getLocalIP() string {
+	// Prefer explicit external IP from env (required for Docker/NAT)
+	if ext := os.Getenv("EXTERNAL_IP"); ext != "" {
+		return ext
+	}
+	if ext := os.Getenv("EXT_IP"); ext != "" {
+		return ext
+	}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return "0.0.0.0"

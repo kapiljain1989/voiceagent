@@ -77,6 +77,9 @@ type siprecSession struct {
 	audioTaps   []chan []byte
 	audioTapsMu sync.Mutex
 
+	// RTP session — set when audio arrives via SIP/RTP (standalone mode)
+	rtpSession *siprecRTPSession
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	log    *slog.Logger
@@ -235,15 +238,20 @@ func (s *siprecSession) readLeg(conn *websocket.Conn, ch chan []byte, role strin
 		}
 	}()
 
-	// Skip initial metadata frame if present
+	// Read initial frame (metadata or first audio)
 	mt, raw, err := conn.ReadMessage()
 	if err != nil {
+		s.log.Info("readLeg initial read error", "role", role, "err", err)
 		return
 	}
+	s.log.Info("readLeg initial frame", "role", role, "type", mt, "bytes", len(raw))
 	if mt == websocket.BinaryMessage && len(raw) > 0 {
 		select {
 		case ch <- raw:
 		default:
+		}
+		if role == "caller" {
+			s.broadcastToTaps(raw)
 		}
 	}
 
@@ -279,7 +287,6 @@ func (s *siprecSession) readLeg(conn *websocket.Conn, ch chan []byte, role strin
 			case ch <- buf:
 			default:
 			}
-			// Broadcast to audio taps (e.g., WebRTC bridge to agent)
 			if role == "caller" {
 				s.broadcastToTaps(buf)
 			}

@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: media-gateway
-  namespace: voiceagent
   labels:
     app: media-gateway
 spec:
@@ -14,21 +13,35 @@ spec:
     metadata:
       labels:
         app: media-gateway
+      annotations:
+        sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: gateway
           image: voiceagent/gateway:latest
-          imagePullPolicy: Never
           ports:
-            - containerPort: 8080
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: sip-udp
+              containerPort: 5062
+              protocol: UDP
+            - name: sip-tcp
+              containerPort: 5062
               protocol: TCP
           env:
             - name: LISTEN_ADDR
               value: ":8080"
+            - name: VOICEAGENT_MODE
+              value: "standalone"
+            - name: SIP_LISTEN_ADDR
+              value: ":5062"
+            - name: EXTERNAL_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             - name: STT_URL
               value: "http://whisper.voiceagent.svc.cluster.local:8000/v1/audio/transcriptions"
-            - name: TTS_URL
-              value: "http://piper.voiceagent.svc.cluster.local:5000"
             - name: GCP_PROJECT_ID
               valueFrom:
                 configMapKeyRef:
@@ -41,12 +54,6 @@ spec:
                   key: region
             - name: CLAUDE_MODEL
               value: "claude-3-5-haiku@20241022"
-            - name: ESL_HOST
-              value: "freeswitch.voiceagent.svc.cluster.local"
-            - name: ESL_PORT
-              value: "8022"
-            - name: ESL_PASSWORD
-              value: "ClueCon"
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: "/secrets/gcp/key.json"
             - name: DATABASE_URL
@@ -72,8 +79,6 @@ spec:
                 secretKeyRef:
                   name: gateway-jwt-secret
                   key: jwt-secret
-            - name: TTS_AUDIO_DIR
-              value: "/tmp/tts"
           volumeMounts:
             - name: gcp-credentials
               mountPath: /secrets/gcp

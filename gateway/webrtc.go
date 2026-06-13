@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -29,6 +31,24 @@ type WebRTCSession struct {
 	cancel     context.CancelFunc
 	startTime  time.Time
 	log        *slog.Logger
+}
+
+// newPCMUPeerConnection creates a PeerConnection that only supports PCMU codec.
+// This forces the browser to send PCMU (not Opus), so we can decode without CGO.
+func newPCMUPeerConnection(config webrtc.Configuration) (*webrtc.PeerConnection, error) {
+	me := &webrtc.MediaEngine{}
+	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:  webrtc.MimeTypePCMU,
+			ClockRate: 8000,
+			Channels:  1,
+		},
+		PayloadType: 0,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, err
+	}
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(me))
+	return api.NewPeerConnection(config)
 }
 
 func NewWebRTCManager(gw *gateway) *WebRTCManager {
@@ -90,15 +110,17 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	pc, err := webrtc.NewPeerConnection(config)
+	// PCMU-only PC so browser sends PCMU (decodable without Opus/CGO)
+	pc, err := newPCMUPeerConnection(config)
 	if err != nil {
 		log.Error("peer connection", "err", err)
 		http.Error(w, "peer connection failed", http.StatusInternalServerError)
 		return
 	}
 
+	// Use PCMU (G.711 μ-law) — no external encoder dependency, all browsers support it
 	outTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1},
 		"audio", "voiceagent-bridge",
 	)
 	if err != nil {
@@ -130,10 +152,54 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 	wm.sessions[callID] = sess
 	wm.mu.Unlock()
 
-	// Agent's mic audio → copilot agent channel
+	// Agent's mic audio → decode PCMU → send back to caller via RTP or WebSocket + copilot
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Info("agent audio track received")
-		go sess.readIncomingAudio(ctx, track)
+		log.Info("agent audio track received", "codec", track.Codec().MimeType,
+			"rtp_path", siprecSess.rtpSession != nil,
+			"ws_path", siprecSess.callerConn != nil)
+		go func() {
+			agentFrames := 0
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				pkt, _, err := track.ReadRTP()
+				if err != nil {
+					log.Info("agent track read ended", "err", err, "frames_sent", agentFrames)
+					return
+				}
+				if len(pkt.Payload) == 0 {
+					continue
+				}
+
+				// PCMU payload → L16 PCM 8kHz → resample to 16kHz
+				pcm8k := DecodeG711Ulaw(pkt.Payload)
+				pcm16k := resample(pcm8k, 8000, 16000)
+
+				agentFrames++
+
+				// Send agent voice to caller: prefer RTP path (standalone), fall back to WebSocket
+				if siprecSess.rtpSession != nil && siprecSess.rtpSession.listener != nil {
+					if err := siprecSess.rtpSession.listener.SendPCM(pcm16k); err != nil {
+						if agentFrames == 1 {
+							log.Error("RTP send failed", "err", err)
+						}
+					}
+				} else if siprecSess.callerConn != nil {
+					if err := siprecSess.callerConn.WriteMessage(websocket.BinaryMessage, pcm16k); err != nil {
+						log.Debug("write to callerConn", "err", err)
+					}
+				}
+
+				// Feed to copilot agent channel for transcription
+				select {
+				case siprecSess.pcmAgent <- pcm16k:
+				default:
+				}
+			}
+		}()
 	})
 
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
@@ -167,11 +233,14 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 
 	<-webrtc.GatheringCompletePromise(pc)
 
-	// Bridge: tap SIPREC caller audio → WebRTC agent speaker
+	// Bridge: tap caller audio → downsample → G.711 μ-law → WebRTC agent speaker
 	callerTap := siprecSess.AddAudioTap()
 	go func() {
 		defer siprecSess.RemoveAudioTap(callerTap)
-		log.Info("bridge started: SIPREC caller → WebRTC agent")
+
+		const frame16kSize = 640 // 20ms at 16kHz L16 (320 samples × 2 bytes)
+		var frameBuf []byte
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -180,35 +249,27 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					return
 				}
-				if err := outTrack.WriteSample(media.Sample{
-					Data:     frame,
-					Duration: 20 * time.Millisecond,
-				}); err != nil {
-					log.Debug("write to agent", "err", err)
+				frameBuf = append(frameBuf, frame...)
+
+				for len(frameBuf) >= frame16kSize {
+					chunk := frameBuf[:frame16kSize]
+					frameBuf = frameBuf[frame16kSize:]
+
+					pcm8k := resample(chunk, 16000, 8000)
+					ulaw := EncodeG711Ulaw(pcm8k)
+
+					if err := outTrack.WriteSample(media.Sample{
+						Data:     ulaw,
+						Duration: 20 * time.Millisecond,
+					}); err != nil {
+						log.Debug("write to agent", "err", err)
+					}
 				}
 			}
 		}
 	}()
 
-	// Agent mic → copilot agent channel (so copilot hears both sides)
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case frame, ok := <-sess.pcmIn:
-				if !ok {
-					return
-				}
-				select {
-				case siprecSess.pcmAgent <- frame:
-				default:
-				}
-			}
-		}
-	}()
-
-	log.Info("WebRTC bridge established")
+	log.Info("WebRTC bridge established (bidirectional)")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -257,9 +318,9 @@ func (wm *WebRTCManager) handleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create output audio track (gateway → browser)
+	// Create output audio track (gateway → browser) — use PCMU for zero-dependency encoding
 	outTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU, ClockRate: 8000, Channels: 1},
 		"audio", "voiceagent",
 	)
 	if err != nil {
@@ -423,8 +484,54 @@ func (wm *WebRTCManager) handleHangup(w http.ResponseWriter, r *http.Request) {
 		sess.close()
 	}
 
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"ok"}`)
+	// For bridge calls, also terminate the underlying SIPREC/SIP session
+	siprecCallID := strings.TrimPrefix(req.CallID, "bridge-")
+	if siprecCallID != req.CallID {
+		slog.Info("ending SIPREC session from bridge hangup", "siprec_call_id", siprecCallID)
+
+		siprecSessionsMu.Lock()
+		siprecSess, exists := siprecSessions[siprecCallID]
+		siprecSessionsMu.Unlock()
+
+		if exists {
+			siprecSess.cancel()
+
+			// Close RTP session (standalone SIP path)
+			if siprecSess.rtpSession != nil {
+				if siprecSess.rtpSession.listener != nil {
+					siprecSess.rtpSession.listener.Close()
+				}
+				siprecSess.rtpSession.cancelFunc()
+				slog.Info("RTP session closed on hangup", "call_id", siprecCallID)
+			}
+
+			// Close WebSocket legs (FS audio_fork path)
+			if siprecSess.callerConn != nil {
+				siprecSess.callerConn.Close()
+			}
+			if siprecSess.agentConn != nil {
+				siprecSess.agentConn.Close()
+			}
+		}
+
+		// Try ESL uuid_kill (works when FS is in the path)
+		if wm.gw != nil {
+			esl := wm.gw.newESLClient()
+			cmd := fmt.Sprintf("uuid_kill %s", siprecCallID)
+			if resp, err := esl.execute(cmd); err != nil {
+				slog.Debug("esl uuid_kill (FS may not be running)", "call_id", siprecCallID, "err", err)
+			} else {
+				slog.Info("call terminated via ESL", "call_id", siprecCallID, "resp", resp)
+			}
+		}
+
+		// Remove from queue
+		if wm.gw != nil && wm.gw.queueMgr != nil {
+			wm.gw.queueMgr.RemoveCallerByCallID(siprecCallID)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (wm *WebRTCManager) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -492,8 +599,11 @@ func (s *WebRTCSession) pipelineWorker(ctx context.Context, copilot *siprecSessi
 		}
 	}()
 
-	// Send outgoing audio (TTS/response) back to browser
+	// Send outgoing audio (TTS/response) back to browser as PCMU
 	go func() {
+		const frame16kSize = 640 // 20ms at 16kHz L16
+		var frameBuf []byte
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -502,12 +612,18 @@ func (s *WebRTCSession) pipelineWorker(ctx context.Context, copilot *siprecSessi
 				if !ok {
 					return
 				}
-				// Write PCM as Opus sample to the output track
-				if err := s.outTrack.WriteSample(media.Sample{
-					Data:     pcm,
-					Duration: 20 * time.Millisecond,
-				}); err != nil {
-					s.log.Debug("write sample", "err", err)
+				frameBuf = append(frameBuf, pcm...)
+				for len(frameBuf) >= frame16kSize {
+					chunk := frameBuf[:frame16kSize]
+					frameBuf = frameBuf[frame16kSize:]
+					pcm8k := resample(chunk, 16000, 8000)
+					ulaw := EncodeG711Ulaw(pcm8k)
+					if err := s.outTrack.WriteSample(media.Sample{
+						Data:     ulaw,
+						Duration: 20 * time.Millisecond,
+					}); err != nil {
+						s.log.Debug("write sample", "err", err)
+					}
 				}
 			}
 		}

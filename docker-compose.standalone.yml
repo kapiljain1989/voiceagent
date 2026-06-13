@@ -1,0 +1,80 @@
+# docker-compose.standalone.yml — Standalone Gateway (Linux production)
+#
+# Gateway runs with host networking for direct SIP/RTP access.
+# No FreeSWITCH needed — gateway handles SIP calls directly.
+#
+# Usage:
+#   EXTERNAL_IP=$(hostname -I | awk '{print $1}') docker compose -f docker-compose.standalone.yml up -d
+#
+# Caller → Gateway SIP :5060 → Copilot + Queue → Agent Console WebRTC
+
+services:
+  gateway:
+    build: gateway/
+    image: voiceagent/gateway:latest
+    network_mode: host
+    user: "0:0"
+    environment:
+      - LISTEN_ADDR=:8080
+      - VOICEAGENT_MODE=standalone
+      - SIP_LISTEN_ADDR=:5060
+      - EXTERNAL_IP=${EXTERNAL_IP}
+      - STT_URL=http://127.0.0.1:8000/v1/audio/transcriptions
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-${ANTHROPIC_VERTEX_PROJECT_ID}}
+      - GCP_REGION=${GCP_REGION:-${CLOUD_ML_REGION:-us-east5}}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-3-5-haiku@20241022}
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp/adc.json
+      - AUTH_ENABLED=true
+      - JWT_SECRET=${JWT_SECRET:-voiceagent-production-secret}
+      - DATABASE_URL=postgres://voiceagent:voiceagent@127.0.0.1:5432/voiceagent?sslmode=disable
+      - REDIS_URL=redis://127.0.0.1:6379/0
+      - CHROMA_URL=http://127.0.0.1:8200
+    volumes:
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-~/.config/gcloud/application_default_credentials.json}:/secrets/gcp/adc.json:ro
+    depends_on:
+      - postgres
+      - whisper
+
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    ports:
+      - "8000:8000"
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-base.en
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=voiceagent
+      - POSTGRES_USER=voiceagent
+      - POSTGRES_PASSWORD=voiceagent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8200:8000"
+    volumes:
+      - chromadata:/chroma/chroma
+
+  ui:
+    build: ui/
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://voiceagent:voiceagent@postgres:5432/voiceagent
+      - GATEWAY_URL=http://127.0.0.1:8080
+      - CHROMA_URL=http://chromadb:8000
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+volumes:
+  pgdata:
+  chromadata:

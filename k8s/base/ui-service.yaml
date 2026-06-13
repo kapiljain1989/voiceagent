@@ -2,15 +2,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ui
-  namespace: voiceagent
   labels:
     app: ui
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: ui
   ports:
     - name: http
       port: 3000
       targetPort: 3000
+      nodePort: 30030
       protocol: TCP

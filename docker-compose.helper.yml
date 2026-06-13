@@ -15,19 +15,27 @@ services:
     build: gateway/
     image: voiceagent/gateway:latest
     user: "0:0"
+    # On Linux: use network_mode: host for direct RTP access (uncomment below)
+    # network_mode: host
+    # On Mac (dev only): use port mapping (RTP won't work for external callers)
     ports:
       - "8080:8080"
-      - "5061:5060/udp"
-      - "5061:5060/tcp"
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
       - "30000-30050:30000-30050/udp"
     environment:
       - LISTEN_ADDR=:8080
       - VOICEAGENT_MODE=standalone
+      - EXTERNAL_IP=${EXTERNAL_IP:-}
       - STT_URL=http://whisper:8000/v1/audio/transcriptions
       - GCP_PROJECT_ID=${GCP_PROJECT_ID:-${ANTHROPIC_VERTEX_PROJECT_ID}}
       - GCP_REGION=${GCP_REGION:-${CLOUD_ML_REGION:-us-east5}}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-3-5-haiku@20241022}
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp/adc.json
+      - EXTERNAL_IP=${EXTERNAL_IP:-192.168.1.156}
+      - ESL_HOST=${ESL_HOST:-voiceagent-freeswitch-1}
+      - ESL_PORT=${ESL_PORT:-8022}
+      - ESL_PASSWORD=${ESL_PASSWORD:-ClueCon}
       - AUTH_ENABLED=true
       - JWT_SECRET=voiceagent-production-secret
       - REDIS_URL=redis://redis:6379/0

@@ -1,0 +1,23 @@
+# Test SBC — External SBC simulator
+#
+# NOT part of VoiceAgent. Simulates an enterprise PBX that routes calls
+# to the VoiceAgent gateway.
+#
+# Usage:
+#   cd test/sbc && docker compose up -d
+#
+# Register a softphone:
+#   Server: localhost:5080
+#   Username: anything (e.g., caller1)
+#   Password: (any or empty)
+#
+# Call any number → routes to VoiceAgent gateway at host:5062
+
+services:
+  sbc:
+    build: .
+    ports:
+      - "5080:5060/udp"
+      - "5080:5060/tcp"
+    environment:
+      - SIP_DOMAIN=test-sbc

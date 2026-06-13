@@ -4,8 +4,6 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { authFetch } from "@/lib/auth";
 import type { CallState } from "@/lib/console-types";
 
-const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
-
 export interface RTCStats {
   rtt: number;
   jitter: number;
@@ -169,9 +167,8 @@ export function useWebRTC(): UseWebRTCReturn {
         setTimeout(resolve, 3000);
       });
 
-      const res = await fetch(`${GATEWAY}/api/webrtc/offer`, {
+      const res = await authFetch("/api/webrtc/offer", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sdp: pc.localDescription?.sdp,
           type: pc.localDescription?.type,
@@ -244,9 +241,8 @@ export function useWebRTC(): UseWebRTCReturn {
         setTimeout(resolve, 3000);
       });
 
-      const res = await fetch(`${GATEWAY}/api/webrtc/bridge`, {
+      const res = await authFetch("/api/webrtc/bridge", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sdp: pc.localDescription?.sdp,
           type: pc.localDescription?.type,
@@ -281,9 +277,8 @@ export function useWebRTC(): UseWebRTCReturn {
 
   const hangup = useCallback(() => {
     if (callId) {
-      fetch(`${GATEWAY}/api/webrtc/hangup`, {
+      authFetch("/api/webrtc/hangup", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ call_id: callId }),
       }).catch(() => {});
     }

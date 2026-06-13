@@ -460,6 +460,7 @@ export default function ConsolePage() {
     setFinalCallDuration(callDuration);
     webrtc.hangup();
     setCallState("disconnected");
+    setSiprecCallId(null);
     setConferenceActive(false);
     setConferenceParty(null);
     setShowTransfer(false);
@@ -559,7 +560,7 @@ export default function ConsolePage() {
       // Pick from queue + bridge SIPREC audio to agent's browser via WebRTC
       if (caller.call_id) {
         setSiprecCallId(caller.call_id);
-        await authFetch("/api/queue/pick", { method: "POST", body: JSON.stringify({ call_id: caller.call_id, agent_id: agentProfile?.id }) });
+        await authFetch("/api/queue/pick", { method: "POST", body: JSON.stringify({ call_id: caller.call_id, agent_id: agentProfile?.id, webrtc_bridge: true }) });
         try {
           await webrtc.bridge(caller.call_id, agentProfile?.id);
         } catch {

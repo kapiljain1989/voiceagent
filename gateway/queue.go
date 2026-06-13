@@ -150,6 +150,7 @@ type pickRequest struct {
 	QueueEntryID string `json:"queue_entry_id"`
 	CallID       string `json:"call_id"`
 	AgentID      string `json:"agent_id"`
+	WebRTCBridge bool   `json:"webrtc_bridge"`
 }
 
 func (qm *QueueManager) handlePickCall(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +163,8 @@ func (qm *QueueManager) handlePickCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
 		return
 	}
+
+	slog.Info("queue pick request", "call_id", req.CallID, "agent_id", req.AgentID, "webrtc_bridge", req.WebRTCBridge, "queue_entry_id", req.QueueEntryID)
 
 	var caller queueEntry
 	var ok bool
@@ -193,8 +196,8 @@ func (qm *QueueManager) handlePickCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// In gateway mode: bridge via ESL. In standalone mode: skip (WebRTC handles it)
-	if caller.CallID != "" && qm.gw != nil && qm.gw.cfg.Mode == "gateway" {
+	// Bridge via ESL only when NOT using WebRTC bridge
+	if caller.CallID != "" && qm.gw != nil && !req.WebRTCBridge {
 		esl := qm.gw.newESLClient()
 		agentExt := req.AgentID
 		if agentExt == "" {
@@ -207,9 +210,11 @@ func (qm *QueueManager) handlePickCall(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.Info("queue pick bridged via ESL", "call_id", caller.CallID, "agent", agentExt, "resp", resp)
 		}
+	} else if req.WebRTCBridge {
+		slog.Info("queue pick: ESL skipped (WebRTC bridge)", "call_id", caller.CallID, "agent", req.AgentID)
 	}
 
-	slog.Info("queue pick", "call_id", caller.CallID, "agent", req.AgentID, "mode", qm.gw.cfg.Mode)
+	slog.Info("queue pick", "call_id", caller.CallID, "agent", req.AgentID, "webrtc", req.WebRTCBridge)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
