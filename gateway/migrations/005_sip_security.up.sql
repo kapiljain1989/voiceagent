@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS sip_trunk_acl (
 CREATE INDEX IF NOT EXISTS idx_trunk_acl_trunk ON sip_trunk_acl(trunk_id);
 CREATE INDEX IF NOT EXISTS idx_trunk_acl_ip ON sip_trunk_acl(ip_address);
 
+-- Trunk type: direct (B2BUA) or siprec (passive observer)
+ALTER TABLE sip_trunks ADD COLUMN IF NOT EXISTS trunk_type TEXT DEFAULT 'direct';
+
 -- Extend sip_trunks with security fields
 ALTER TABLE sip_trunks ADD COLUMN IF NOT EXISTS auth_realm TEXT DEFAULT '';
 ALTER TABLE sip_trunks ADD COLUMN IF NOT EXISTS auth_user TEXT DEFAULT '';

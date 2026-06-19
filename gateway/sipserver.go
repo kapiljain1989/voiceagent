@@ -145,8 +145,26 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			tx.Respond(resp)
 			return
 		}
-		slog.Info("SIP trunk authenticated", "trunk", trunk.Name, "policy", trunk.SecurityPolicy)
+		slog.Info("SIP trunk authenticated", "trunk", trunk.Name, "type", trunk.TrunkType, "policy", trunk.SecurityPolicy)
 	}
+
+	// Determine trunk type from authenticated trunk or auto-detect from SIPREC metadata
+	trunkType := "direct"
+	if s.security != nil {
+		trunk, _, _ := s.security.AuthenticateRequest(req)
+		if trunk != nil && trunk.TrunkType != "" {
+			trunkType = trunk.TrunkType
+		}
+	}
+	// Auto-detect SIPREC from multipart/mixed content with recording metadata (RFC 7866)
+	contentType := req.ContentType()
+	if contentType != nil && strings.Contains(contentType.Value(), "multipart") {
+		if strings.Contains(string(req.Body()), "recording") {
+			trunkType = "siprec"
+		}
+	}
+
+	slog.Info("SIP call mode", "call_id", callID, "trunk_type", trunkType)
 
 	// Send 100 Trying
 	trying := sip.NewResponseFromRequest(req, 100, "Trying", nil)
@@ -157,7 +175,9 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 	var sdpBody string
 	var siprecXML string
 
-	contentType := req.ContentType()
+	if contentType == nil {
+		contentType = req.ContentType()
+	}
 	if contentType != nil && strings.Contains(contentType.Value(), "multipart") {
 		sdpBody, siprecXML = parseMultipartBody(body, contentType.Value())
 	} else {
@@ -250,11 +270,12 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		cancelFunc: cancel,
 	}
 
-	// Set remote RTP address for sending agent audio back
-	listener.SetRemoteAddr(remoteAddr, remotePort)
-
-	// Store RTP session reference on copilot for WebRTC bridge
-	copilot.rtpSession = sess
+	// For Direct trunks: set remote addr for sending agent audio back
+	// For SIPREC trunks: only receive (passive observer)
+	if trunkType == "direct" {
+		listener.SetRemoteAddr(remoteAddr, remotePort)
+		copilot.rtpSession = sess
+	}
 
 	s.sessMu.Lock()
 	s.sessions[callID+"_"+role] = sess
@@ -274,11 +295,15 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		if callerNum == "" {
 			callerNum = callID[:12]
 		}
+		reason := "Incoming call"
+		if trunkType == "siprec" {
+			reason = "SIPREC observation"
+		}
 		s.gw.queueMgr.AddCaller("Support", queueEntry{
 			ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
 			CallID:   callID,
 			Number:   callerNum,
-			Reason:   "Incoming call",
+			Reason:   reason,
 			Priority: "normal",
 		})
 	}
@@ -286,13 +311,14 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 	slog.Info("SIP session started",
 		"call_id", callID,
 		"role", role,
+		"type", trunkType,
 		"remote", fmt.Sprintf("%s:%d", remoteAddr, remotePort),
 		"local_rtp", localPort,
 		"codec", codec,
 	)
 
-	// Build SDP answer
-	sdpAnswer := buildSDPAnswer(localIP, localPort, codec)
+	// Build SDP answer — recvonly for SIPREC, sendrecv for Direct
+	sdpAnswer := buildSDPAnswerWithMode(localIP, localPort, codec, trunkType)
 
 	slog.Info("SDP answer", "sdp", sdpAnswer)
 
@@ -378,11 +404,21 @@ func parseSDPOffer(body string) (addr string, port int, codec string, err error)
 }
 
 func buildSDPAnswer(localIP string, localPort int, codec string) string {
+	return buildSDPAnswerWithMode(localIP, localPort, codec, "direct")
+}
+
+func buildSDPAnswerWithMode(localIP string, localPort int, codec, trunkType string) string {
 	pt := "0"
 	codecName := "PCMU"
 	if codec == "PCMA" {
 		pt = "8"
 		codecName = "PCMA"
+	}
+
+	// SIPREC = passive observer (recvonly), Direct = two-way (sendrecv)
+	mode := "sendrecv"
+	if trunkType == "siprec" {
+		mode = "recvonly"
 	}
 
 	return fmt.Sprintf("v=0\r\n"+
@@ -394,10 +430,10 @@ func buildSDPAnswer(localIP string, localPort int, codec string) string {
 		"a=rtpmap:%s %s/8000\r\n"+
 		"a=rtpmap:101 telephone-event/8000\r\n"+
 		"a=fmtp:101 0-16\r\n"+
-		"a=sendrecv\r\n"+
+		"a=%s\r\n"+
 		"a=ptime:20\r\n",
 		time.Now().UnixMilli(), time.Now().UnixMilli(), localIP,
-		localIP, localPort, pt, pt, codecName)
+		localIP, localPort, pt, pt, codecName, mode)
 }
 
 func parseMultipartBody(body, contentType string) (sdpPart, xmlPart string) {

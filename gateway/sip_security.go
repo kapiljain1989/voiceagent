@@ -31,6 +31,7 @@ type sipTrunkEntry struct {
 	Name           string
 	Address        string
 	Port           int
+	TrunkType      string // direct, siprec
 	AuthRealm      string
 	AuthUser       string
 	AuthPassHash   string
@@ -74,6 +75,7 @@ func (ss *SIPSecurity) loadTrunks() {
 
 	rows, err := ss.db.QueryContext(ctx, `
 		SELECT id, name, COALESCE(address,''), COALESCE(port,5060),
+		       COALESCE(trunk_type,'direct'),
 		       COALESCE(auth_realm,''), COALESCE(auth_user,''), COALESCE(auth_password_hash,''),
 		       COALESCE(tls_enabled,false), COALESCE(srtp_enabled,false),
 		       COALESCE(security_policy,'strict')
@@ -88,6 +90,7 @@ func (ss *SIPSecurity) loadTrunks() {
 	for rows.Next() {
 		var t sipTrunkEntry
 		rows.Scan(&t.ID, &t.Name, &t.Address, &t.Port,
+			&t.TrunkType,
 			&t.AuthRealm, &t.AuthUser, &t.AuthPassHash,
 			&t.TLSEnabled, &t.SRTPEnabled, &t.SecurityPolicy)
 		trunks = append(trunks, t)
