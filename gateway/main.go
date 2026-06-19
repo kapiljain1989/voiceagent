@@ -145,6 +145,7 @@ type gateway struct {
 	didRouter   *DIDRouter
 	acd         *ACD
 	announcer   *QueueAnnouncer
+	webrtcMgr   *WebRTCManager
 }
 
 // -------------------------------------------------------------------
@@ -306,9 +307,7 @@ func main() {
 
 	webrtcMgr := NewWebRTCManager(gw)
 	webrtcMgr.RegisterRoutes(mux)
-
-	callCtrl := NewCallControlHandler(gw, webrtcMgr)
-	callCtrl.RegisterRoutes(mux)
+	gw.webrtcMgr = webrtcMgr
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"ok","sessions":%d,"mode":"%s"}`, gw.sessions.Load(), cfg.Mode)
