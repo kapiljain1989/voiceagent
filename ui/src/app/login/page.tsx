@@ -41,7 +41,9 @@ export default function LoginPage() {
         role: data.role,
       }));
 
-      router.push("/");
+      // Redirect based on role
+      const { getDefaultPage } = await import("@/lib/auth");
+      router.push(getDefaultPage(data.role));
     } catch {
       setError("Cannot connect to gateway");
     }

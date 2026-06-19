@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { getUser, logout } from "@/lib/auth";
+import { usePathname, useRouter } from "next/navigation";
+import { getUser, getUserRole, getNavForRole, canAccessPage, getDefaultPage, logout } from "@/lib/auth";
 
 const nav = [
   { href: "/", label: "Command", icon: "grid", shortcut: "D" },
@@ -88,7 +88,17 @@ const icons: Record<string, React.ReactNode> = {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [expanded, setExpanded] = useState(true);
+  const role = getUserRole();
+  const allowedPaths = getNavForRole(role);
+
+  // Redirect if current page is not accessible
+  useEffect(() => {
+    if (pathname !== "/login" && !canAccessPage(pathname, role)) {
+      router.replace(getDefaultPage(role));
+    }
+  }, [pathname, role, router]);
 
   useEffect(() => {
     document.documentElement.dataset.sidebarCollapsed = expanded ? "false" : "true";
@@ -142,7 +152,7 @@ export function Sidebar() {
 
         {/* Nav */}
         <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">
-          {nav.map((item) => {
+          {nav.filter((item) => allowedPaths.includes(item.href)).map((item) => {
             const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             return (
               <Link
