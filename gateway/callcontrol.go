@@ -217,11 +217,50 @@ func (gw *gateway) handleCallTransfer(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "transferred", "target": targetValue})
 
 	case "agent":
-		// Ring the target agent
-		if gw.acd != nil && gw.acd.agentMgr != nil {
-			gw.acd.agentMgr.RingAgent(targetValue, siprecCallID, "Transfer", "Transfer", 0)
+		// Disconnect current agent's WebRTC
+		if gw.webrtcMgr != nil {
+			gw.webrtcMgr.mu.Lock()
+			if sess, ok := gw.webrtcMgr.sessions[req.CallID]; ok {
+				sess.close()
+				delete(gw.webrtcMgr.sessions, req.CallID)
+			}
+			gw.webrtcMgr.mu.Unlock()
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ringing_agent", "target": targetValue})
+
+		// Update current agent state
+		if gw.acd != nil && req.AgentID != "" {
+			gw.acd.OnCallEnd(req.AgentID)
+		}
+
+		// Re-queue so the target agent can pick via Console
+		if gw.queueMgr != nil {
+			gw.queueMgr.RemoveCallerByCallID(siprecCallID)
+			gw.queueMgr.AddCaller("Transfer", queueEntry{
+				ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
+				CallID:   siprecCallID,
+				Number:   "Transfer",
+				Reason:   fmt.Sprintf("Transfer from agent"),
+				Priority: "high",
+			})
+		}
+
+		// Ring the target agent directly
+		if gw.acd != nil && gw.acd.agentMgr != nil {
+			// Get caller number from SIPREC session
+			callerNum := "Transfer"
+			siprecSessionsMu.Lock()
+			if s, ok := siprecSessions[siprecCallID]; ok {
+				if s.callerNumber != "" {
+					callerNum = s.callerNumber
+				}
+			}
+			siprecSessionsMu.Unlock()
+
+			gw.acd.agentMgr.RingAgent(targetValue, siprecCallID, callerNum, "Transfer", 0)
+		}
+
+		slog.Info("call transferred to agent", "call_id", siprecCallID, "target_agent", targetValue)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "transferred", "target": targetValue})
 
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported target_type: " + targetType})
