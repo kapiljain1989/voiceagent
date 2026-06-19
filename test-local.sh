@@ -12,6 +12,8 @@
 set -e
 
 COMPOSE="docker compose -f docker-compose.test.yml"
+GW_PORT="${GW_PORT:-8080}"
+UI_PORT="${UI_PORT:-3000}"
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -28,8 +30,8 @@ case "${1:-help}" in
     echo -e "${GREEN}╔═══════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║     Test Environment Ready                ║${NC}"
     echo -e "${GREEN}╠═══════════════════════════════════════════╣${NC}"
-    echo -e "${GREEN}║  Console:  http://localhost:3000           ║${NC}"
-    echo -e "${GREEN}║  Gateway:  http://localhost:8080           ║${NC}"
+    echo -e "${GREEN}║  Console:  http://localhost:${UI_PORT}           ║${NC}"
+    echo -e "${GREEN}║  Gateway:  http://localhost:${GW_PORT}           ║${NC}"
     echo -e "${GREEN}║                                           ║${NC}"
     echo -e "${GREEN}║  Next steps:                              ║${NC}"
     echo -e "${GREEN}║    ./test-local.sh setup  (create agents) ║${NC}"
@@ -47,7 +49,7 @@ case "${1:-help}" in
 
   setup)
     echo -e "${CYAN}Setting up agents...${NC}"
-    GATEWAY_URL=http://localhost:8080 ./test/manage-agents.sh setup
+    GATEWAY_URL=http://localhost:${GW_PORT} ./test/manage-agents.sh setup
     ;;
 
   down)
@@ -65,10 +67,10 @@ case "${1:-help}" in
     $COMPOSE ps
     echo ""
     echo -e "${CYAN}=== Gateway ===${NC}"
-    curl -s http://localhost:8080/healthz 2>&1 || echo "Not reachable"
+    curl -s http://localhost:${GW_PORT}/healthz 2>&1 || echo "Not reachable"
     echo ""
     echo -e "${CYAN}=== UI ===${NC}"
-    curl -s -o /dev/null -w "HTTP %{http_code}" http://localhost:3000 2>&1 || echo "Not reachable"
+    curl -s -o /dev/null -w "HTTP %{http_code}" http://localhost:${UI_PORT} 2>&1 || echo "Not reachable"
     echo ""
     ;;
 

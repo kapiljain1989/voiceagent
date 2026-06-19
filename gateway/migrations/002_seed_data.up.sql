@@ -1,7 +1,8 @@
 -- Seed data for VoiceAgent
 -- Default admin user (password: admin)
+-- password = sha256("voiceagent:admin")
 INSERT INTO users (username, password_hash, role) VALUES
-    ('admin', 'admin', 'admin')
+    ('admin', '403e232c1f108e51019a5daf9043f83538bdb5048c62615c691da702f39044f1', 'admin')
 ON CONFLICT (username) DO NOTHING;
 
 -- Demo agents
