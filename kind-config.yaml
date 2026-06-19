@@ -26,11 +26,11 @@ nodes:
       - containerPort: 30090
         hostPort: 3001
         protocol: TCP
-      # SIP signaling (gateway hostNetwork)
-      - containerPort: 5062
+      # SIP signaling (gateway NodePort 30062 → host 5062)
+      - containerPort: 30062
         hostPort: 5062
         protocol: UDP
-      - containerPort: 5062
+      - containerPort: 30062
         hostPort: 5062
         protocol: TCP
       # RTP media pool

@@ -53,6 +53,7 @@ func (d *Database) RunMigrations() error {
 		"migrations/002_seed_data.up.sql",
 		"migrations/003_custom_security_rules.up.sql",
 		"migrations/004_agent_routing.up.sql",
+		"migrations/005_sip_security.up.sql",
 	}
 
 	for _, f := range files {

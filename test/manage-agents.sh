@@ -57,9 +57,9 @@ cmd_setup() {
     fi
     ok "Admin logged in"
 
-    # 2. Create agent users
+    # 2. Create agent users (username = firstname, password = firstname)
     info "Creating agent users..."
-    for user in agent1 agent2 agent3; do
+    for user in sarah alex priya; do
         result=$(api POST /api/auth/users "$TOKEN" "{\"username\":\"$user\",\"password\":\"$user\",\"role\":\"agent\"}")
         if echo "$result" | grep -q "error"; then
             info "$user already exists"
@@ -105,36 +105,43 @@ cmd_setup() {
         "status": "On Break",
         "max_calls": 3
     }' > /dev/null
-    ok "Priya Sharma (ext 2003, Billing — On Break)"
+    ok "Priya Sharma (ext 2003, Billing)"
 
-    # 4. Link users to agents
+    # 3b. Set specific statuses
+    info "Setting agent statuses..."
+    AGENTS=$(api GET /api/agents "$TOKEN")
+    PRIYA_ID=$(echo "$AGENTS" | python3 -c "import sys,json; agents=json.load(sys.stdin); print(next((a['id'] for a in agents if a.get('name')=='Priya Sharma'),''))" 2>/dev/null)
+    if [ -n "$PRIYA_ID" ]; then
+        api PUT /api/agents "$TOKEN" "{\"id\":\"$PRIYA_ID\",\"status\":\"On Break\"}" > /dev/null
+        ok "Priya Sharma → On Break"
+    fi
+
+    # 4. Link users to agents (requires user_id, not username)
     info "Linking users to agent profiles..."
     AGENTS=$(api GET /api/agents "$TOKEN")
-    AGENT1_ID=$(echo "$AGENTS" | python3 -c "import sys,json; agents=json.load(sys.stdin); print(next((a['id'] for a in agents if a.get('name')=='Sarah Chen'),''))" 2>/dev/null)
-    AGENT2_ID=$(echo "$AGENTS" | python3 -c "import sys,json; agents=json.load(sys.stdin); print(next((a['id'] for a in agents if a.get('name')=='Alex Rivera'),''))" 2>/dev/null)
-    AGENT3_ID=$(echo "$AGENTS" | python3 -c "import sys,json; agents=json.load(sys.stdin); print(next((a['id'] for a in agents if a.get('name')=='Priya Sharma'),''))" 2>/dev/null)
+    USERS=$(api GET /api/auth/users "$TOKEN")
 
-    if [ -n "$AGENT1_ID" ]; then
-        api POST /api/agents/link-user "$TOKEN" "{\"agent_id\":\"$AGENT1_ID\",\"username\":\"agent1\"}" > /dev/null 2>&1
-        ok "agent1 → Sarah Chen"
-    fi
-    if [ -n "$AGENT2_ID" ]; then
-        api POST /api/agents/link-user "$TOKEN" "{\"agent_id\":\"$AGENT2_ID\",\"username\":\"agent2\"}" > /dev/null 2>&1
-        ok "agent2 → Alex Rivera"
-    fi
-    if [ -n "$AGENT3_ID" ]; then
-        api POST /api/agents/link-user "$TOKEN" "{\"agent_id\":\"$AGENT3_ID\",\"username\":\"agent3\"}" > /dev/null 2>&1
-        ok "agent3 → Priya Sharma"
-    fi
+    for pair in "sarah:Sarah Chen" "alex:Alex Rivera" "priya:Priya Sharma"; do
+        user="${pair%%:*}"
+        name="${pair##*:}"
+        user_id=$(echo "$USERS" | python3 -c "import sys,json; print(next((u['id'] for u in json.load(sys.stdin) if u.get('username')=='$user'),''))" 2>/dev/null)
+        agent_id=$(echo "$AGENTS" | python3 -c "import sys,json; print(next((a['id'] for a in json.load(sys.stdin) if a.get('name')=='$name'),''))" 2>/dev/null)
+        if [ -n "$user_id" ] && [ -n "$agent_id" ]; then
+            api POST /api/agents/link-user "$TOKEN" "{\"agent_id\":\"$agent_id\",\"user_id\":\"$user_id\"}" > /dev/null 2>&1
+            ok "$user → $name"
+        else
+            info "$user or $name not found — skipping link"
+        fi
+    done
 
     echo ""
     echo -e "${GREEN}Setup complete!${NC}"
     echo ""
     echo "  Logins:"
-    echo "    admin/admin    — Admin (manage agents, view all)"
-    echo "    agent1/agent1  — Sarah Chen (Support, Available)"
-    echo "    agent2/agent2  — Alex Rivera (Sales, Available)"
-    echo "    agent3/agent3  — Priya Sharma (Billing, On Break)"
+    echo "    admin/admin  — Admin (manage agents, view all)"
+    echo "    sarah/sarah  — Sarah Chen (Support, Available)"
+    echo "    alex/alex    — Alex Rivera (Sales, Available)"
+    echo "    priya/priya  — Priya Sharma (Billing, On Break)"
     echo ""
     echo "  Console: http://localhost:3000/console"
     echo "  Agents:  http://localhost:3000/agents"

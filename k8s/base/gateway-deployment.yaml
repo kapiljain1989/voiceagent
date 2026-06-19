@@ -25,9 +25,11 @@ spec:
               protocol: TCP
             - name: sip-udp
               containerPort: 5062
+              hostPort: 5062
               protocol: UDP
             - name: sip-tcp
               containerPort: 5062
+              hostPort: 5062
               protocol: TCP
           env:
             - name: LISTEN_ADDR
@@ -56,8 +58,6 @@ spec:
               value: "claude-3-5-haiku@20241022"
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: "/secrets/gcp/key.json"
-            - name: DATABASE_URL
-              value: "postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.voiceagent.svc.cluster.local:5432/voiceagent?sslmode=disable"
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
@@ -68,6 +68,8 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: password
+            - name: DATABASE_URL
+              value: "postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.voiceagent.svc.cluster.local:5432/voiceagent?sslmode=disable"
             - name: REDIS_URL
               value: "redis://redis.voiceagent.svc.cluster.local:6379/0"
             - name: CHROMA_URL

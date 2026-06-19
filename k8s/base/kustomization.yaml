@@ -36,5 +36,5 @@ resources:
   # Configuration
   - gcp-configmap.yaml
   - gateway-jwt-secret.yaml
-  # Network policies
-  - network-policies.yaml
+  # Network policies (disabled for local dev — enable for production)
+  # - network-policies.yaml

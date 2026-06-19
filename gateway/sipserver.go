@@ -25,6 +25,7 @@ type SIPServer struct {
 	rtpNext  int
 	sessions map[string]*siprecRTPSession
 	sessMu   sync.Mutex
+	security *SIPSecurity
 }
 
 type siprecRTPSession struct {
@@ -51,6 +52,12 @@ func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
 		return nil, fmt.Errorf("sipgo server: %w", err)
 	}
 
+	// Initialize SIP security (IP whitelist, digest auth)
+	var sipSec *SIPSecurity
+	if database != nil {
+		sipSec = NewSIPSecurity(database.DB())
+	}
+
 	s := &SIPServer{
 		gw:       gw,
 		ua:       ua,
@@ -59,12 +66,19 @@ func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
 		rtpBase:  30000,
 		rtpNext:  30000,
 		sessions: make(map[string]*siprecRTPSession),
+		security: sipSec,
 	}
 
 	server.OnInvite(s.handleInvite)
 	server.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {})
 	server.OnBye(s.handleBye)
 	server.OnOptions(s.handleOptions)
+	server.OnRegister(func(req *sip.Request, tx sip.ServerTransaction) {
+		slog.Info("SIP REGISTER", "from", req.From().Address.User, "contact", req.Contact())
+		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
+		res.AppendHeader(sip.NewHeader("Expires", "3600"))
+		tx.Respond(res)
+	})
 
 	return s, nil
 }
@@ -106,7 +120,33 @@ func (s *SIPServer) handleOptions(req *sip.Request, tx sip.ServerTransaction) {
 
 func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 	callID := req.CallID().Value()
-	slog.Info("SIPREC INVITE received", "call_id", callID, "from", req.From().Address.User)
+	sourceIP := extractSourceIP(req)
+	slog.Info("SIP INVITE received", "call_id", callID, "from", req.From().Address.User, "source", sourceIP)
+
+	// Security: authenticate the request against configured trunks
+	if s.security != nil {
+		trunk, code, err := s.security.AuthenticateRequest(req)
+		if err != nil {
+			if code == 401 {
+				// Send digest auth challenge
+				params := parseDigestParams("nonce=" + err.Error())
+				nonce := params["nonce"]
+				realm := params["realm"]
+				if realm == "" {
+					realm = "voiceagent"
+				}
+				challenge := sip.NewResponseFromRequest(req, 401, "Unauthorized", nil)
+				challenge.AppendHeader(sip.NewHeader("WWW-Authenticate",
+					fmt.Sprintf(`Digest realm="%s", nonce="%s", algorithm=MD5, qop="auth"`, realm, nonce)))
+				tx.Respond(challenge)
+				return
+			}
+			resp := sip.NewResponseFromRequest(req, code, "Forbidden", nil)
+			tx.Respond(resp)
+			return
+		}
+		slog.Info("SIP trunk authenticated", "trunk", trunk.Name, "policy", trunk.SecurityPolicy)
+	}
 
 	// Send 100 Trying
 	trying := sip.NewResponseFromRequest(req, 100, "Trying", nil)
