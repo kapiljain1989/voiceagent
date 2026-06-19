@@ -216,6 +216,11 @@ func (qm *QueueManager) handlePickCall(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("queue pick", "call_id", caller.CallID, "agent", req.AgentID, "webrtc", req.WebRTCBridge)
 
+	// Stop queue announcements for this caller
+	if qm.gw != nil && qm.gw.announcer != nil {
+		qm.gw.announcer.StopAnnouncements(caller.CallID)
+	}
+
 	// Update agent state: active_calls++, status=On Call
 	if qm.gw != nil && qm.gw.acd != nil && req.AgentID != "" {
 		qm.gw.acd.OnCallStart(req.AgentID)

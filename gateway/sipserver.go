@@ -331,6 +331,11 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 			Reason:   reason,
 			Priority: "normal",
 		})
+
+		// Start queue announcements (TTS position/wait to caller via RTP)
+		if trunkType == "direct" && s.gw.announcer != nil {
+			s.gw.announcer.StartAnnouncements(callID, queueName, copilot)
+		}
 	}
 
 	slog.Info("SIP session started",
@@ -376,6 +381,11 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 		}
 	}
 	s.sessMu.Unlock()
+
+	// Stop announcements
+	if s.gw.announcer != nil {
+		s.gw.announcer.StopAnnouncements(callID)
+	}
 
 	// Remove from queue
 	if s.gw.queueMgr != nil {

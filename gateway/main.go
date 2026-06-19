@@ -141,9 +141,10 @@ type gateway struct {
 	ttsPool    *WorkerPool
 	rateLimiter *RateLimiter
 	admission  *AdmissionController
-	queueMgr   *QueueManager
-	didRouter  *DIDRouter
-	acd        *ACD
+	queueMgr    *QueueManager
+	didRouter   *DIDRouter
+	acd         *ACD
+	announcer   *QueueAnnouncer
 }
 
 // -------------------------------------------------------------------
@@ -269,6 +270,9 @@ func main() {
 	acd := NewACD(api.db, gw, agentSessions)
 	acd.Start()
 	gw.acd = acd
+
+	// Queue announcer — TTS position/wait announcements to callers
+	gw.announcer = NewQueueAnnouncer(gw)
 
 	failover := NewFailoverManager(gw)
 	mux.HandleFunc("/api/failover/status", func(w http.ResponseWriter, r *http.Request) {

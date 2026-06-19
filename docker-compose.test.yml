@@ -28,6 +28,7 @@ services:
       - SIP_LISTEN_ADDR=:5062
       - EXTERNAL_IP=gateway
       - STT_URL=http://whisper:8000/v1/audio/transcriptions
+      - TTS_URL=http://piper:5000
       - GCP_PROJECT_ID=${GCP_PROJECT_ID:-${ANTHROPIC_VERTEX_PROJECT_ID}}
       - GCP_REGION=${GCP_REGION:-${CLOUD_ML_REGION:-us-east5}}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-3-5-haiku@20241022}
@@ -67,6 +68,11 @@ services:
     image: fedirz/faster-whisper-server:latest-cpu
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-base.en
+
+  piper:
+    image: artibex/piper-http:latest
+    environment:
+      - MODEL_URL=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx
 
   chromadb:
     image: chromadb/chroma:latest
