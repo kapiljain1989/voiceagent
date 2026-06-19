@@ -189,20 +189,22 @@ func (m *AgentSessionManager) handleAgentSSE(w http.ResponseWriter, r *http.Requ
 }
 
 // Send a ring event to a specific agent
-func (m *AgentSessionManager) RingAgent(agentID, callID, callerNumber, queueName string) {
+func (m *AgentSessionManager) RingAgent(agentID, callID, callerNumber, queueName string, waitSec int) {
 	m.mu.RLock()
 	sess, ok := m.sessions[agentID]
 	m.mu.RUnlock()
 
 	if !ok {
+		slog.Info("ACD ring: agent not connected to SSE", "agent_id", agentID)
 		return
 	}
 
-	evt, _ := json.Marshal(map[string]string{
-		"type":   "ring",
-		"call_id": callID,
-		"caller": callerNumber,
-		"queue":  queueName,
+	evt, _ := json.Marshal(map[string]any{
+		"type":         "ring",
+		"call_id":      callID,
+		"caller":       callerNumber,
+		"queue":        queueName,
+		"wait_seconds": waitSec,
 	})
 
 	for _, ch := range sess.SSEChans {
@@ -326,10 +328,15 @@ func (m *AgentSessionManager) getAgentByUserID(ctx context.Context, userID strin
 
 func getUserIDFromRequest(r *http.Request) string {
 	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
+	token := ""
+	if authHeader != "" {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	} else if qToken := r.URL.Query().Get("token"); qToken != "" {
+		token = qToken
+	}
+	if token == "" {
 		return ""
 	}
-	token := strings.TrimPrefix(authHeader, "Bearer ")
 
 	// Token format: hex(json_payload).signature
 	parts := strings.SplitN(token, ".", 2)

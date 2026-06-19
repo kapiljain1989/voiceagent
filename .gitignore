@@ -43,3 +43,4 @@ demos/gifs/*.webm
 .claude/
 *.log
 *.log.*
+test/__pycache__/

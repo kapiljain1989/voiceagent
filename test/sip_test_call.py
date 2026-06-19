@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Simple SIP+RTP test caller — calls the gateway, sends audio, receives audio.
-Runs locally on the Mac to bypass Cloudflare/NAT issues.
 
 Usage:
-    python3 test/sip_test_call.py [gateway_ip:port] [duration_seconds]
+    python3 test/sip_test_call.py [gateway_ip:port] [duration_seconds] [dialed_number]
 
 Example:
     python3 test/sip_test_call.py 127.0.0.1:5062 30
+    python3 test/sip_test_call.py gateway:5062 60 +18005550100
 """
 
 import socket
@@ -22,6 +22,7 @@ import re
 GW_HOST = "127.0.0.1"
 GW_PORT = 5062
 DURATION = 30
+DIALED_NUMBER = "2001"
 LOCAL_RTP_PORT = 16000
 LOCAL_SIP_PORT = 15060
 
@@ -32,6 +33,8 @@ if len(sys.argv) > 1:
         GW_PORT = int(parts[1])
 if len(sys.argv) > 2:
     DURATION = int(sys.argv[2])
+if len(sys.argv) > 3:
+    DIALED_NUMBER = sys.argv[3]
 
 
 def generate_tone(freq, sample_rate=8000, duration_ms=20):
@@ -154,10 +157,10 @@ def sip_call():
     )
 
     invite = (
-        f"INVITE sip:2001@{GW_HOST}:{GW_PORT} SIP/2.0\r\n"
+        f"INVITE sip:{DIALED_NUMBER}@{GW_HOST}:{GW_PORT} SIP/2.0\r\n"
         f"Via: SIP/2.0/UDP {local_ip}:{LOCAL_SIP_PORT};rport;branch={branch}\r\n"
         f"From: <sip:testcaller@{local_ip}>;tag={from_tag}\r\n"
-        f"To: <sip:2001@{GW_HOST}>\r\n"
+        f"To: <sip:{DIALED_NUMBER}@{GW_HOST}>\r\n"
         f"Call-ID: {call_id}\r\n"
         f"CSeq: 1 INVITE\r\n"
         f"Contact: <sip:testcaller@{local_ip}:{LOCAL_SIP_PORT}>\r\n"
@@ -205,12 +208,12 @@ def sip_call():
 
                 # Send ACK
                 ack_branch = f"z9hG4bK-{random.randint(100000, 999999)}"
-                to_hdr = f"<sip:2001@{GW_HOST}>"
+                to_hdr = f"<sip:{DIALED_NUMBER}@{GW_HOST}>"
                 if to_tag:
                     to_hdr += f";tag={to_tag}"
 
                 ack = (
-                    f"ACK sip:2001@{GW_HOST}:{GW_PORT} SIP/2.0\r\n"
+                    f"ACK sip:{DIALED_NUMBER}@{GW_HOST}:{GW_PORT} SIP/2.0\r\n"
                     f"Via: SIP/2.0/UDP {local_ip}:{LOCAL_SIP_PORT};rport;branch={ack_branch}\r\n"
                     f"From: <sip:testcaller@{local_ip}>;tag={from_tag}\r\n"
                     f"To: {to_hdr}\r\n"
@@ -259,12 +262,12 @@ def sip_call():
 
     # Send BYE
     bye_branch = f"z9hG4bK-{random.randint(100000, 999999)}"
-    to_hdr = f"<sip:2001@{GW_HOST}>"
+    to_hdr = f"<sip:{DIALED_NUMBER}@{GW_HOST}>"
     if to_tag:
         to_hdr += f";tag={to_tag}"
 
     bye = (
-        f"BYE sip:2001@{GW_HOST}:{GW_PORT} SIP/2.0\r\n"
+        f"BYE sip:{DIALED_NUMBER}@{GW_HOST}:{GW_PORT} SIP/2.0\r\n"
         f"Via: SIP/2.0/UDP {local_ip}:{LOCAL_SIP_PORT};rport;branch={bye_branch}\r\n"
         f"From: <sip:testcaller@{local_ip}>;tag={from_tag}\r\n"
         f"To: {to_hdr}\r\n"

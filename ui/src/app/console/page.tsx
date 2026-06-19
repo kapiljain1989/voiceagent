@@ -303,12 +303,18 @@ export default function ConsolePage() {
   useEffect(() => {
     if (IS_DEMO || !agentProfile) return;
     const gw = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
-    const es = new EventSource(`${gw}/api/agent/me/events`);
+    const token = localStorage.getItem("voiceagent_token") || "";
+    const es = new EventSource(`${gw}/api/agent/me/events?token=${token}`);
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === "ring") {
-          setIncomingCall({ call_id: data.call_id, caller: data.caller, queue: data.queue });
+          // Only show ring if agent is idle (not already on a call)
+          setIncomingCall((prev) => {
+            // Don't replace if already showing a ring for the same call
+            if (prev && prev.call_id === data.call_id) return prev;
+            return { call_id: data.call_id, caller: data.caller, queue: data.queue };
+          });
         }
       } catch {}
     };
@@ -461,6 +467,7 @@ export default function ConsolePage() {
     webrtc.hangup();
     setCallState("disconnected");
     setSiprecCallId(null);
+    setIncomingCall(null);
     setConferenceActive(false);
     setConferenceParty(null);
     setShowTransfer(false);
@@ -666,14 +673,18 @@ export default function ConsolePage() {
           <div className="flex gap-2">
             <button
               onClick={async () => {
-                setCallId(incomingCall.call_id);
+                const callId = incomingCall.call_id;
                 setCallDuration(0);
                 resetCallData();
+                setSiprecCallId(callId);
                 setIncomingCall(null);
+                // Pick from queue + bridge via WebRTC
                 try {
-                  await webrtc.dial(incomingCall.caller, agentProfile?.id);
+                  await authFetch("/api/queue/pick", { method: "POST", body: JSON.stringify({ call_id: callId, agent_id: agentProfile?.id, webrtc_bridge: true }) });
+                  await webrtc.bridge(callId, agentProfile?.id);
                 } catch {
-                  setCallState("connected");
+                  setCallState("idle");
+                  setSiprecCallId(null);
                 }
               }}
               className="px-6 py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs"

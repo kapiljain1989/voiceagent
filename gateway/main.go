@@ -142,6 +142,8 @@ type gateway struct {
 	rateLimiter *RateLimiter
 	admission  *AdmissionController
 	queueMgr   *QueueManager
+	didRouter  *DIDRouter
+	acd        *ACD
 }
 
 // -------------------------------------------------------------------
@@ -256,8 +258,17 @@ func main() {
 	callRouter := NewCallRouter(api.db)
 	callRouter.RegisterRoutes(mux)
 
+	didRouter := NewDIDRouter(api.db)
+	didRouter.RegisterRoutes(mux)
+	gw.didRouter = didRouter
+
 	agentSessions := NewAgentSessionManager(api.db)
 	agentSessions.RegisterRoutes(mux)
+
+	// ACD — auto-assigns queued calls to best agent
+	acd := NewACD(api.db, gw, agentSessions)
+	acd.Start()
+	gw.acd = acd
 
 	failover := NewFailoverManager(gw)
 	mux.HandleFunc("/api/failover/status", func(w http.ResponseWriter, r *http.Request) {

@@ -481,6 +481,10 @@ func (wm *WebRTCManager) handleHangup(w http.ResponseWriter, r *http.Request) {
 
 	if ok {
 		sess.log.Info("WebRTC hangup")
+		// Update agent state: active_calls--, status=Available
+		if wm.gw != nil && wm.gw.acd != nil && sess.agentID != "" {
+			wm.gw.acd.OnCallEnd(sess.agentID)
+		}
 		sess.close()
 	}
 

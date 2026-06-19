@@ -293,10 +293,16 @@ func (ah *AuthHandler) Middleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// Check Bearer token
+		// Check Bearer token (header) or query param (for SSE/EventSource)
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			// Allow unauthenticated access when AUTH_ENABLED is not set
+		token := ""
+		if authHeader != "" {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+		} else if qToken := r.URL.Query().Get("token"); qToken != "" {
+			token = qToken
+		}
+
+		if token == "" {
 			if envOr("AUTH_ENABLED", "") != "true" {
 				next.ServeHTTP(w, r)
 				return
@@ -304,8 +310,6 @@ func (ah *AuthHandler) Middleware(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 			return
 		}
-
-		token := strings.TrimPrefix(authHeader, "Bearer ")
 		claims := ah.validateToken(token)
 		if claims == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired token"})

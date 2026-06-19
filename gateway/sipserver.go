@@ -289,7 +289,32 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 
 	go listener.ReceiveAndDecode(ctx, pcmCh, role, callID, copilot)
 
-	// Auto-add to queue for Console visibility
+	// DID routing — determine which queue/agent based on dialed number
+	dialedNumber := ""
+	if to := req.To(); to != nil {
+		dialedNumber = to.Address.User
+	}
+	queueName := "Support"
+	if role == "caller" && s.gw.didRouter != nil {
+		trunkIDForRouting := ""
+		if s.security != nil {
+			if trunk, _, _ := s.security.AuthenticateRequest(req); trunk != nil {
+				trunkIDForRouting = trunk.ID
+			}
+		}
+		destType, destValue, _ := s.gw.didRouter.MatchDID(dialedNumber, trunkIDForRouting)
+		if destType == "queue" && destValue != "" {
+			queueName = destValue
+			slog.Info("DID routed", "dialed", dialedNumber, "queue", queueName)
+		} else if destType == "agent" && destValue != "" {
+			slog.Info("DID routed to agent", "dialed", dialedNumber, "agent", destValue)
+			queueName = "Direct"
+		} else {
+			slog.Info("DID no match, using default", "dialed", dialedNumber, "queue", queueName)
+		}
+	}
+
+	// Add to queue for Console visibility
 	if role == "caller" && s.gw.queueMgr != nil {
 		callerNum := copilot.callerNumber
 		if callerNum == "" {
@@ -299,7 +324,7 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 		if trunkType == "siprec" {
 			reason = "SIPREC observation"
 		}
-		s.gw.queueMgr.AddCaller("Support", queueEntry{
+		s.gw.queueMgr.AddCaller(queueName, queueEntry{
 			ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
 			CallID:   callID,
 			Number:   callerNum,
@@ -355,6 +380,13 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 	// Remove from queue
 	if s.gw.queueMgr != nil {
 		s.gw.queueMgr.RemoveCallerByCallID(callID)
+	}
+
+	// Clear ACD ringing state
+	if s.gw.acd != nil {
+		s.gw.acd.mu.Lock()
+		delete(s.gw.acd.ringing, callID)
+		s.gw.acd.mu.Unlock()
 	}
 
 	okResp := sip.NewResponseFromRequest(req, 200, "OK", nil)
