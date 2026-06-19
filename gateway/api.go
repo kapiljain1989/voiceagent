@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -212,11 +213,20 @@ func (h *APIHandler) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
+		return
+	}
+
 	var id string
 	err := h.db.QueryRowContext(r.Context(),
 		"INSERT INTO agents (name, email, phone, expertise) VALUES ($1, $2, $3, $4) RETURNING id",
 		req.Name, req.Email, req.Phone, req.Expertise).Scan(&id)
 	if err != nil {
+		if strings.Contains(err.Error(), "agents_email_unique") || strings.Contains(err.Error(), "duplicate key") {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "agent with this email already exists"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

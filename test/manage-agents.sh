@@ -71,41 +71,20 @@ cmd_setup() {
     # 3. Create agent profiles
     info "Creating agent profiles..."
 
-    api POST /api/agents "$TOKEN" '{
-        "name": "Sarah Chen",
-        "email": "sarah@voiceagent.ai",
-        "phone": "+1-555-0101",
-        "extension": "2001",
-        "department": "Support",
-        "expertise": ["billing", "technical", "returns"],
-        "status": "Available",
-        "max_calls": 3
-    }' > /dev/null
-    ok "Sarah Chen (ext 2001, Support)"
-
-    api POST /api/agents "$TOKEN" '{
-        "name": "Alex Rivera",
-        "email": "alex@voiceagent.ai",
-        "phone": "+1-555-0102",
-        "extension": "2002",
-        "department": "Sales",
-        "expertise": ["pricing", "enterprise", "upsell"],
-        "status": "Available",
-        "max_calls": 3
-    }' > /dev/null
-    ok "Alex Rivera (ext 2002, Sales)"
-
-    api POST /api/agents "$TOKEN" '{
-        "name": "Priya Sharma",
-        "email": "priya@voiceagent.ai",
-        "phone": "+1-555-0103",
-        "extension": "2003",
-        "department": "Billing",
-        "expertise": ["payments", "refunds", "invoices"],
-        "status": "On Break",
-        "max_calls": 3
-    }' > /dev/null
-    ok "Priya Sharma (ext 2003, Billing)"
+    for agent_json in \
+        '{"name":"Sarah Chen","email":"sarah@voiceagent.ai","phone":"+1-555-0101","extension":"2001","department":"Support","expertise":["billing","technical","returns"],"max_calls":3}' \
+        '{"name":"Alex Rivera","email":"alex@voiceagent.ai","phone":"+1-555-0102","extension":"2002","department":"Sales","expertise":["pricing","enterprise","upsell"],"max_calls":3}' \
+        '{"name":"Priya Sharma","email":"priya@voiceagent.ai","phone":"+1-555-0103","extension":"2003","department":"Billing","expertise":["payments","refunds","invoices"],"max_calls":3}'; do
+        name=$(echo "$agent_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['name'])" 2>/dev/null)
+        result=$(api POST /api/agents "$TOKEN" "$agent_json")
+        if echo "$result" | grep -q "already exists"; then
+            info "$name already exists — skipping"
+        elif echo "$result" | grep -q "created"; then
+            ok "$name created"
+        else
+            info "$name: $result"
+        fi
+    done
 
     # 3b. Set specific statuses
     info "Setting agent statuses..."
