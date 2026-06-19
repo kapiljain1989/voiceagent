@@ -108,19 +108,28 @@ def rtp_receiver(sock, duration, stop_event):
 
 def sip_call():
     """Make a SIP call to the gateway with RTP audio."""
-    call_id = f"test-{int(time.time())}@127.0.0.1"
+    # Detect own IP (use 0.0.0.0 for bind, resolve actual IP for SDP)
+    local_bind = "0.0.0.0"
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((GW_HOST, GW_PORT))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        local_ip = "127.0.0.1"
+
+    call_id = f"test-{int(time.time())}@{local_ip}"
     from_tag = f"tag-{random.randint(10000, 99999)}"
     branch = f"z9hG4bK-{random.randint(100000, 999999)}"
-    local_ip = "127.0.0.1"
 
     # Create SIP socket
     sip_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sip_sock.bind((local_ip, LOCAL_SIP_PORT))
+    sip_sock.bind((local_bind, LOCAL_SIP_PORT))
     sip_sock.settimeout(10)
 
     # Create RTP socket
     rtp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    rtp_sock.bind((local_ip, LOCAL_RTP_PORT))
+    rtp_sock.bind((local_bind, LOCAL_RTP_PORT))
 
     print(f"\n{'='*60}")
     print(f"  SIP Test Call to {GW_HOST}:{GW_PORT}")
