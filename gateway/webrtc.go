@@ -31,6 +31,7 @@ type WebRTCSession struct {
 	cancel     context.CancelFunc
 	startTime  time.Time
 	log        *slog.Logger
+	onHold     bool
 }
 
 // newPCMUPeerConnection creates a PeerConnection that only supports PCMU codec.
@@ -170,7 +171,7 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 					log.Info("agent track read ended", "err", err, "frames_sent", agentFrames)
 					return
 				}
-				if len(pkt.Payload) == 0 {
+				if len(pkt.Payload) == 0 || sess.onHold {
 					continue
 				}
 
@@ -248,6 +249,10 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 			case frame, ok := <-callerTap:
 				if !ok {
 					return
+				}
+				// Skip forwarding caller audio when on hold
+				if sess.onHold {
+					continue
 				}
 				frameBuf = append(frameBuf, frame...)
 

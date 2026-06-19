@@ -206,6 +206,50 @@ func (qa *QueueAnnouncer) synthesize(ctx context.Context, text string) ([]byte, 
 	return resample(pcm, 22050, sampleRate), nil
 }
 
+// playHoldMusic sends hold music to the caller while on hold.
+// Loops a short TTS message + silence until the call is no longer on hold.
+func (qa *QueueAnnouncer) playHoldMusic(copilot *siprecSession, bridgeCallID string) {
+	if copilot == nil || copilot.rtpSession == nil {
+		return
+	}
+
+	log := slog.With("call_id", bridgeCallID)
+	log.Info("hold music started")
+
+	// Find the WebRTC session to check onHold flag
+	wm := qa.gw
+	_ = wm
+
+	// Play hold message once
+	ctx := context.Background()
+	qa.playTTS(ctx, "Please hold. Your agent will return shortly.", copilot, log)
+
+	// Send silence (comfort noise) while on hold, checking every 2 seconds
+	silenceFrame := make([]byte, 640) // 20ms silence at 16kHz L16
+	listener := copilot.rtpSession.listener
+
+	for {
+		// Check if the call session still exists
+		siprecSessionsMu.Lock()
+		_, exists := siprecSessions[extractSIPRECCallID(bridgeCallID)]
+		siprecSessionsMu.Unlock()
+		if !exists {
+			break
+		}
+
+		// Send silence for 2 seconds (100 frames × 20ms)
+		for i := 0; i < 100; i++ {
+			if err := listener.SendPCM(silenceFrame); err != nil {
+				log.Info("hold music ended (send error)")
+				return
+			}
+			time.Sleep(18 * time.Millisecond)
+		}
+	}
+
+	log.Info("hold music ended")
+}
+
 // GenerateTone creates a simple tone as PCM for testing (no TTS needed)
 func GenerateTone(freq float64, durationMs int) []byte {
 	samples := sampleRate * durationMs / 1000

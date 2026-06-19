@@ -506,10 +506,32 @@ export default function ConsolePage() {
     }
   }
 
-  function handleBlindTransfer(target: string) {
-    showNotif(`Transferred to ${target}`, "cyan");
+  async function handleBlindTransfer(target: string) {
     setShowTransfer(false);
-    handleEndCall();
+    const cid = webrtc.callId || callId;
+    if (!cid) return;
+
+    // Determine if target is a queue name or agent
+    const isQueue = ["Support", "Sales", "Billing", "Escalation"].includes(target);
+    try {
+      await authFetch("/api/call/transfer", {
+        method: "POST",
+        body: JSON.stringify({
+          call_id: cid,
+          transfer_type: "blind",
+          target_type: isQueue ? "queue" : "agent",
+          target_value: target,
+          agent_id: agentProfile?.id,
+        }),
+      });
+      showNotif(`Transferred to ${target}`, "cyan");
+      setCallState("idle");
+      setSiprecCallId(null);
+      setIncomingCall(null);
+      resetCallData();
+    } catch {
+      showNotif("Transfer failed", "rose");
+    }
   }
 
   function handleAttendedTransfer(target: string) {
