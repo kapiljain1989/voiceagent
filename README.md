@@ -10,7 +10,7 @@ A production-grade **AI call center platform** with standalone SIP gateway, real
                     ┌─────────────────────────────────────────────────┐
                     │              VoiceAgent Gateway                  │
                     │                                                  │
-  Caller ──SIP──►   │  SIP B2BUA ──► RTP Listener ──► STT (Whisper)   │
+  Caller ─SIP/TLS─► │  SIP B2BUA ──► RTP Listener ──► STT (Whisper)   │
   (Phone)           │      │              │                 │          │
                     │      │              ▼                 ▼          │
                     │      │        Audio Mixer      Claude Copilot    │
@@ -173,6 +173,24 @@ Security policies:
 - **permissive** — IP whitelist only (no digest auth)
 - **disabled** — accept from any source (development only)
 
+### SIP over TLS (SIPS)
+
+Enable encrypted SIP signaling on port 5061:
+
+```bash
+# Generate or provide TLS certificate and key
+SIP_TLS_CERT="/path/to/sip.crt"
+SIP_TLS_KEY="/path/to/sip.key"
+SIP_TLS_ADDR=":5061"    # default SIPS port
+```
+
+TLS runs alongside UDP+TCP listeners. SBCs connect via `sips:<VOICEAGENT_IP>:5061;transport=tls`. Minimum TLS 1.2 enforced.
+
+For testing with a self-signed certificate:
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout sip.key -out sip.crt -days 365 -nodes -subj "/CN=voiceagent"
+```
+
 ### DID Routing
 
 Map dialed numbers to queues, agents, or IVR flows:
@@ -313,6 +331,9 @@ Each tenant gets isolated agents, queues, trunks, DIDs, recordings, and webhooks
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SIP_LISTEN_ADDR` | (empty) | SIP signaling address (e.g. `:5060`) |
+| `SIP_TLS_CERT` | (empty) | Path to TLS certificate for SIPS |
+| `SIP_TLS_KEY` | (empty) | Path to TLS private key for SIPS |
+| `SIP_TLS_ADDR` | `:5061` | SIPS listen address (only when cert/key set) |
 | `MODE` | `standalone` | `standalone` (B2BUA) or `gateway` (with FreeSWITCH) |
 | `DATABASE_URL` | (empty) | PostgreSQL connection string |
 | `STT_URL` | `http://whisper:8000/v1/audio/transcriptions` | Whisper STT endpoint |
