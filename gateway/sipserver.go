@@ -436,6 +436,9 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 	}
 	s.sessMu.Unlock()
 
+	// Broadcast call_ended via SSE so Console updates
+	s.gw.broadcastCallState(callID, "ended")
+
 	// Close WebRTC bridge (so Console shows disconnected)
 	bridgeCallID := "bridge-" + callID
 	if s.gw.webrtcMgr != nil {

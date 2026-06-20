@@ -429,7 +429,8 @@ export default function ConsolePage() {
   }, [webrtc.callState, webrtc.callId]);
 
   // ── SSE stream for real transcripts/copilot when WebRTC call is active ──
-  const sseStream = useSSEStream(webrtc.callState === "connected" ? (siprecCallId || webrtc.callId) : null);
+  const sseCallId = (webrtc.callState === "connected" || callState === "dialing") ? (siprecCallId || webrtc.callId) : null;
+  const sseStream = useSSEStream(sseCallId);
   useEffect(() => {
     if (sseStream.transcripts.length > 0) {
       setTranscriptEntries(sseStream.transcripts);
@@ -444,6 +445,22 @@ export default function ConsolePage() {
       setShowPostCallSummary(true);
     }
   }, [sseStream.transcripts, sseStream.suggestions, sseStream.summary]);
+
+  // React to remote call state changes (e.g., caller BYE)
+  useEffect(() => {
+    if (sseStream.callStateFromSSE === "ended") {
+      webrtc.hangup();
+      setCallState("disconnected");
+      setSiprecCallId(null);
+      setIncomingCall(null);
+      setTimeout(() => {
+        setCallState("idle");
+        if (transcriptEntries.length > 0) {
+          setShowPostCallSummary(true);
+        }
+      }, 1500);
+    }
+  }, [sseStream.callStateFromSSE]);
 
   // ── Call actions — use WebRTC for real calls, fallback to mock ──
   async function handleDial() {
