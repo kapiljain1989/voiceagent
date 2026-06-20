@@ -48,6 +48,7 @@ type siprecRTPSession struct {
 	sipCallID   string
 	sipSource   string // where to send BYE
 	sipConn     *net.UDPConn // outbound call's UDP connection (reuse for BYE)
+	isOutbound  bool
 }
 
 func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
@@ -488,16 +489,25 @@ func (s *SIPServer) SendBYE(callID string) {
 		return
 	}
 
-	// Build BYE — From/To swapped vs INVITE (we are the UAS sending BYE)
-	// From = our side (was To in INVITE), with our tag
-	// To = caller side (was From in INVITE), with their tag
 	localAddr := getLocalIP() + s.addr
+
+	// Build BYE with correct From/To based on call direction
+	var byeFrom, byeTo string
+	if sess.isOutbound {
+		// Outbound: we are the caller — From/To same as INVITE
+		byeFrom = sess.sipFrom
+		byeTo = fmt.Sprintf("%s;tag=%s", sess.sipTo, sess.toTag)
+	} else {
+		// Inbound: we are the callee — From/To swapped vs INVITE
+		byeFrom = fmt.Sprintf("%s;tag=%s", sess.sipTo, sess.toTag)
+		byeTo = fmt.Sprintf("%s;tag=%s", sess.sipFrom, sess.fromTag)
+	}
 
 	bye := fmt.Sprintf(
 		"BYE sip:%s SIP/2.0\r\n"+
 			"Via: SIP/2.0/UDP %s;branch=z9hG4bK-%d\r\n"+
-			"From: %s;tag=%s\r\n"+
-			"To: %s;tag=%s\r\n"+
+			"From: %s\r\n"+
+			"To: %s\r\n"+
 			"Call-ID: %s\r\n"+
 			"CSeq: 2 BYE\r\n"+
 			"Max-Forwards: 70\r\n"+
@@ -505,8 +515,8 @@ func (s *SIPServer) SendBYE(callID string) {
 			"\r\n",
 		sess.sipSource,
 		localAddr, time.Now().UnixNano(),
-		sess.sipTo, sess.toTag,
-		sess.sipFrom, sess.fromTag,
+		byeFrom,
+		byeTo,
 		sess.sipCallID,
 	)
 

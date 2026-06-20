@@ -326,6 +326,7 @@ func (s *SIPServer) makeOutboundCall(callID, number, callerID string, trunk *SIP
 		sipCallID:  callID,
 		sipSource:  trunkAddr,
 		sipConn:    conn,
+		isOutbound: true,
 	}
 	copilot.rtpSession = sess
 
