@@ -32,9 +32,9 @@ const (
 	playbackFrameMs = 20
 
 	// VAD parameters
-	vadRMSThreshold  = 50    // RMS energy above this = speech (tuned for laptop mics)
-	vadSilenceMs     = 400   // ms of silence triggers flush
-	vadMaxBufferSecs = 4     // cap at 4s to keep Whisper fast
+	vadRMSThreshold  = 85    // RMS energy above this = speech (G.711 noise floor ~65-80, quiet speech ~90+)
+	vadSilenceMs     = 600   // ms of silence triggers flush
+	vadMaxBufferSecs = 8     // cap at 8s to keep Whisper fast
 	vadFrameMs       = 20    // expected frame duration from FreeSWITCH
 	sampleRate       = 16000 // Hz
 	bytesPerSample   = 2     // 16-bit
@@ -1293,6 +1293,29 @@ func isWhisperHallucination(text string) bool {
 		}
 		for _, c := range counts {
 			if c >= 4 && float64(c)/float64(len(words)) > 0.4 {
+				return true
+			}
+		}
+	}
+
+	// Low vocabulary diversity: few unique words relative to total (hallucination signature)
+	if len(words) >= 10 {
+		unique := make(map[string]struct{})
+		for _, w := range words {
+			unique[w] = struct{}{}
+		}
+		if float64(len(unique))/float64(len(words)) < 0.25 {
+			return true
+		}
+	}
+
+	// Bigram repetition: any 2-word phrase appearing 4+ times
+	if len(words) >= 8 {
+		bigrams := make(map[string]int)
+		for i := 0; i < len(words)-1; i++ {
+			bg := words[i] + " " + words[i+1]
+			bigrams[bg]++
+			if bigrams[bg] >= 4 {
 				return true
 			}
 		}

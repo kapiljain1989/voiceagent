@@ -438,13 +438,16 @@ export default function ConsolePage() {
     if (sseStream.suggestions.length > 0) {
       setCopilotSuggestions(sseStream.suggestions);
     }
+    if (sseStream.voiceSentiment) {
+      setVoiceSentiment(sseStream.voiceSentiment);
+    }
     if (sseStream.summary?.voice_sentiment) {
       setVoiceSentiment(sseStream.summary.voice_sentiment);
     }
     if (sseStream.summary) {
       setShowPostCallSummary(true);
     }
-  }, [sseStream.transcripts, sseStream.suggestions, sseStream.summary]);
+  }, [sseStream.transcripts, sseStream.suggestions, sseStream.summary, sseStream.voiceSentiment]);
 
   // React to remote call state changes (e.g., caller BYE)
   useEffect(() => {

@@ -129,6 +129,7 @@ export function useSSEStream(callId: string | null) {
   const [suggestions, setSuggestions] = useState<CopilotSuggestion[]>([]);
   const [summary, setSummary] = useState<PostCallSummaryData | null>(null);
   const [callStateFromSSE, setCallStateFromSSE] = useState<string | null>(null);
+  const [voiceSentiment, setVoiceSentiment] = useState<VoiceSentimentData | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   const reset = useCallback(() => {
@@ -136,6 +137,7 @@ export function useSSEStream(callId: string | null) {
     setSuggestions([]);
     setSummary(null);
     setCallStateFromSSE(null);
+    setVoiceSentiment(null);
   }, []);
 
   useEffect(() => {
@@ -183,6 +185,20 @@ export function useSSEStream(callId: string | null) {
             duration: data.duration || 0,
             voice_sentiment: data.voice_sentiment,
           });
+        } else if (data.type === "voice_sentiment") {
+          setVoiceSentiment({
+            agitation: data.agitation ?? 0,
+            frustration: data.frustration ?? 0,
+            engagement: data.engagement ?? 0,
+            avg_pitch_hz: data.avg_pitch_hz ?? 0,
+            speaking_rate_wpm: data.speaking_rate_wpm ?? 0,
+            avg_energy: data.avg_energy ?? 0,
+            energy_trend: data.energy_trend ?? "stable",
+            pitch_variance: data.pitch_variance ?? 0,
+            silence_ratio: data.silence_ratio ?? 0,
+            sentiment: data.sentiment ?? "neutral",
+            confidence: data.confidence ?? 0,
+          });
         } else if (data.type === "call_state") {
           setCallStateFromSSE(data.state);
         }
@@ -206,7 +222,7 @@ export function useSSEStream(callId: string | null) {
     };
   }, [callId]);
 
-  return { transcripts, suggestions, summary, callStateFromSSE, reset };
+  return { transcripts, suggestions, summary, callStateFromSSE, voiceSentiment, reset };
 }
 
 // ── Polling Hooks ──

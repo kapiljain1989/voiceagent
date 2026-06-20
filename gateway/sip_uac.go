@@ -122,6 +122,11 @@ func (s *SIPServer) findOutboundTrunk(trunkID string) *SIPTrunk {
 func (s *SIPServer) makeOutboundCall(callID, number, callerID string, trunk *SIPTrunk, agentID string) {
 	log := slog.With("call_id", callID, "number", number)
 
+	// Create copilot session EARLY so Console SSE can connect immediately
+	copilot := getOrCreateSIPRECSession(s.gw, callID)
+	copilot.callerNumber = number
+	copilot.agentNumber = callerID
+
 	// Allocate local RTP port
 	localPort := s.allocateRTPPort()
 	localIP := getLocalIP()
@@ -304,12 +309,7 @@ func (s *SIPServer) makeOutboundCall(callID, number, callerID string, trunk *SIP
 		listener.SetRemoteAddr(remoteRTPAddr, remoteRTPPort)
 	}
 
-	// Create copilot session
-	copilot := getOrCreateSIPRECSession(s.gw, callID)
-	copilot.callerNumber = number
-	copilot.agentNumber = callerID
-
-	// Store session
+	// Store session (copilot already created at start of makeOutboundCall)
 	sess := &siprecRTPSession{
 		callID:     callID,
 		fromTag:    fromTag,

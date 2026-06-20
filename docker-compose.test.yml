@@ -73,7 +73,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - WHISPER__MODEL=Systran/faster-whisper-base.en
+      - WHISPER__MODEL=Systran/faster-whisper-small.en
 
   piper:
     image: artibex/piper-http:latest

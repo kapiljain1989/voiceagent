@@ -281,7 +281,16 @@ func (gw *gateway) handleCallConference(w http.ResponseWriter, r *http.Request) 
 func (gw *gateway) broadcastCallState(callID, state string) {
 	siprecSessionsMu.Lock()
 	s, ok := siprecSessions[callID]
+	clientCount := 0
+	if ok {
+		s.sseMu.Lock()
+		clientCount = len(s.sseClients)
+		s.sseMu.Unlock()
+	}
 	siprecSessionsMu.Unlock()
+
+	slog.Info("broadcastCallState", "call_id", callID, "state", state, "session_found", ok, "sse_clients", clientCount)
+
 	if ok {
 		s.broadcastSSE(map[string]any{
 			"type":    "call_state",

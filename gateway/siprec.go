@@ -309,18 +309,21 @@ func (s *siprecSession) agentSTT(ctx context.Context) {
 }
 
 func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker string) {
+	// Time-based chunking: collect audio in fixed windows, let Whisper handle VAD.
+	// This avoids RMS-based VAD problems with low-amplitude G.711 telephony audio.
+	const chunkMs = 3000
+	const chunkFrames = chunkMs / vadFrameMs // 150 frames = 3 seconds
+	warmupFrames := 500 / vadFrameMs         // skip first 0.5s
+
 	var audioBuf []byte
-	speechActive := false
-	silentFrames := 0
 	frameCount := 0
-	silenceLimit := vadSilenceMs / vadFrameMs
-	maxBytes := vadMaxBufferSecs * sampleRate * bytesPerSample
-	warmupFrames := 500 / vadFrameMs
+	sttFrames := 0
 
 	for {
 		select {
 		case <-ctx.Done():
-			if len(audioBuf) > 0 && speechActive {
+			s.log.Info("STT context done", "speaker", speaker, "frames", sttFrames)
+			if len(audioBuf) > 0 {
 				flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				s.transcribeAndEmit(flushCtx, audioBuf, speaker)
 				flushCancel()
@@ -328,7 +331,8 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 			return
 		case pcm, ok := <-pcmCh:
 			if !ok {
-				if len(audioBuf) > 0 && speechActive {
+				s.log.Info("STT channel closed", "speaker", speaker, "frames", sttFrames)
+				if len(audioBuf) > 0 {
 					flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 					s.transcribeAndEmit(flushCtx, audioBuf, speaker)
 					flushCancel()
@@ -336,49 +340,69 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 				return
 			}
 
+			sttFrames++
 			frameCount++
 			if frameCount <= warmupFrames {
 				continue
 			}
 
-			// Feed every frame to voice sentiment analyzer
+			// Feed every frame to voice sentiment analyzer + broadcast periodically
 			if speaker == "customer" {
 				s.voiceSentiment.ProcessFrame(pcm)
-			}
-
-			rms := rmsEnergy(pcm)
-
-			if rms > vadRMSThreshold {
-				audioBuf = append(audioBuf, pcm...)
-				speechActive = true
-				silentFrames = 0
-			} else if speechActive {
-				audioBuf = append(audioBuf, pcm...)
-				silentFrames++
-				if silentFrames >= silenceLimit {
-					s.transcribeAndEmit(ctx, audioBuf, speaker)
-					audioBuf = audioBuf[:0]
-					speechActive = false
-					silentFrames = 0
+				if frameCount%250 == 0 {
+					vs := s.voiceSentiment.Analyze()
+					s.broadcastSSE(map[string]any{
+						"type":              "voice_sentiment",
+						"agitation":         vs.Agitation,
+						"frustration":       vs.Frustration,
+						"engagement":        vs.Engagement,
+						"avg_pitch_hz":      vs.AvgPitch,
+						"speaking_rate_wpm": vs.SpeakingRate,
+						"avg_energy":        vs.AvgEnergy,
+						"energy_trend":      vs.EnergyTrend,
+						"pitch_variance":    vs.PitchVariance,
+						"silence_ratio":     vs.SilenceRatio,
+						"sentiment":         vs.Sentiment,
+						"confidence":        vs.Confidence,
+					})
 				}
 			}
 
-			if len(audioBuf) > maxBytes {
-				if speechActive {
-					s.transcribeAndEmit(ctx, audioBuf, speaker)
-				}
+			audioBuf = append(audioBuf, pcm...)
+
+			// Flush every chunkFrames (3 seconds)
+			if (frameCount-warmupFrames)%chunkFrames == 0 && len(audioBuf) > 0 {
+				buf := make([]byte, len(audioBuf))
+				copy(buf, audioBuf)
 				audioBuf = audioBuf[:0]
-				speechActive = false
-				silentFrames = 0
+				go s.transcribeAndEmit(ctx, buf, speaker)
 			}
 		}
 	}
 }
 
 func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speaker string) {
-	if len(pcm) == 0 {
+	minBytes := sampleRate * bytesPerSample * 3 / 10 // 0.3s minimum
+	if len(pcm) < minBytes {
 		return
 	}
+
+	// Amplify quiet telephony audio (G.711 decodes to low amplitude)
+	amplified := make([]byte, len(pcm))
+	copy(amplified, pcm)
+	const gain = 8
+	for i := 0; i < len(amplified)-1; i += 2 {
+		s16 := int16(amplified[i]) | int16(amplified[i+1])<<8
+		v := int32(s16) * gain
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		amplified[i] = byte(v)
+		amplified[i+1] = byte(v >> 8)
+	}
+	pcm = amplified
 
 	wav := buildWAV(pcm, sampleRate, 1, 16)
 	text, err := s.whisperTranscribe(ctx, wav)
@@ -388,11 +412,12 @@ func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speak
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
+		s.log.Info("whisper returned empty", "speaker", speaker, "pcm_bytes", len(pcm))
 		return
 	}
 
 	if isWhisperHallucination(text) {
-		s.log.Debug("filtered hallucination", "text", text, "speaker", speaker)
+		s.log.Info("filtered hallucination", "speaker", speaker, "text_len", len(text), "preview", text[:min(len(text), 80)])
 		return
 	}
 
@@ -430,7 +455,7 @@ func (s *siprecSession) whisperTranscribe(ctx context.Context, wav []byte) (stri
 	w := multipart.NewWriter(&body)
 	part, _ := w.CreateFormFile("file", "audio.wav")
 	part.Write(wav)
-	w.WriteField("model", "Systran/faster-whisper-base.en")
+	w.WriteField("model", "Systran/faster-whisper-small.en")
 	w.WriteField("response_format", "json")
 	w.Close()
 
@@ -798,13 +823,17 @@ func (s *siprecSession) broadcastSSE(event map[string]any) {
 	data, _ := json.Marshal(event)
 
 	s.sseMu.Lock()
-	defer s.sseMu.Unlock()
-
+	clientCount := len(s.sseClients)
 	for ch := range s.sseClients {
 		select {
 		case ch <- data:
 		default:
 		}
+	}
+	s.sseMu.Unlock()
+
+	if t, ok := event["type"]; ok && (t == "voice_sentiment" || t == "transcript") {
+		s.log.Info("SSE broadcast", "type", t, "clients", clientCount)
 	}
 }
 
@@ -850,7 +879,11 @@ func (gw *gateway) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	ch := make(chan []byte, 20)
 	s.addSSEClient(ch)
-	defer s.removeSSEClient(ch)
+	slog.Info("SSE client connected", "call_id", callID)
+	defer func() {
+		s.removeSSEClient(ch)
+		slog.Info("SSE client disconnected", "call_id", callID)
+	}()
 
 	ctx := r.Context()
 	for {
