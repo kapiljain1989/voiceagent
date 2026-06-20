@@ -1,0 +1,1428 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>VoiceAgent — Calling Console</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['DM Sans', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'monospace'],
+      },
+      colors: {
+        surface: { base: '#0a0e1a', raised: '#0f1629', overlay: '#070b14' },
+      },
+      keyframes: {
+        'pulse-glow': { '0%, 100%': { opacity: 1, boxShadow: '0 0 4px currentColor' }, '50%': { opacity: 0.5, boxShadow: '0 0 12px currentColor' } },
+        'ring-pulse': { '0%': { transform: 'scale(1)', opacity: 0.8 }, '100%': { transform: 'scale(2.2)', opacity: 0 } },
+        'meter': { '0%, 100%': { height: '20%' }, '50%': { height: '80%' } },
+        'slide-up': { '0%': { opacity: 0, transform: 'translateY(8px)' }, '100%': { opacity: 1, transform: 'translateY(0)' } },
+        'fade-in': { '0%': { opacity: 0 }, '100%': { opacity: 1 } },
+      },
+      animation: {
+        'pulse-glow': 'pulse-glow 2s ease-in-out infinite',
+        'ring-pulse': 'ring-pulse 1.5s ease-out infinite',
+        'slide-up': 'slide-up 0.3s ease-out',
+        'fade-in': 'fade-in 0.2s ease-out',
+      },
+    },
+  },
+};
+</script>
+<style>
+  * { box-sizing: border-box; }
+  html { background: #0a0e1a; }
+  body { margin: 0; font-family: 'DM Sans', sans-serif; background: #0a0e1a; color: #e2e8f0; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(6, 182, 212, 0.15); border-radius: 4px; }
+  .glow-border { box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.06), inset 0 1px 0 rgba(255,255,255,0.02); }
+  .glow-emerald { box-shadow: 0 0 20px rgba(16, 185, 129, 0.12); }
+  .glow-rose { box-shadow: 0 0 20px rgba(244, 63, 94, 0.12); }
+  .glow-amber { box-shadow: 0 0 20px rgba(245, 158, 11, 0.12); }
+  .glow-cyan { box-shadow: 0 0 20px rgba(6, 182, 212, 0.12); }
+  .meter-bar { animation: meter 0.8s ease-in-out infinite; }
+  .panel { background: #0f1629; border: 1px solid rgba(6, 182, 212, 0.08); border-radius: 8px; }
+  .btn-action { transition: all 0.15s ease; cursor: pointer; user-select: none; }
+  .btn-action:active { transform: scale(0.96); }
+  .dialpad-btn { transition: all 0.1s ease; }
+  .dialpad-btn:hover { background: rgba(6, 182, 212, 0.08); }
+  .dialpad-btn:active { background: rgba(6, 182, 212, 0.15); transform: scale(0.95); }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .transcript-entry { animation: slide-up 0.3s ease-out; }
+  input:focus, textarea:focus { outline: none; box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3); }
+  textarea { resize: none; }
+  .agent-row:hover { background: rgba(6, 182, 212, 0.03); }
+</style>
+</head>
+<body class="min-h-screen">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ─── Constants ───
+const CALL_STATES = { IDLE: 'idle', DIALING: 'dialing', CONNECTED: 'connected', HOLD: 'hold', MUTED: 'muted', DISCONNECTED: 'disconnected' };
+const AGENT_STATUSES = ['Available', 'Busy', 'On Break', 'Wrap-up'];
+const STATUS_COLORS = { 'Available': 'emerald', 'Busy': 'rose', 'On Break': 'amber', 'Wrap-up': 'violet', 'On Call': 'cyan' };
+
+const TEAM = [
+  { id: 1, name: 'Sarah Chen', ext: '2001', status: 'Available', department: 'Support' },
+  { id: 2, name: 'Alex Rivera', ext: '2002', status: 'On Call', department: 'Sales' },
+  { id: 3, name: 'Priya Sharma', ext: '2003', status: 'Available', department: 'Support' },
+  { id: 4, name: 'Marcus Johnson', ext: '2004', status: 'On Break', department: 'Billing' },
+  { id: 5, name: 'Yuki Tanaka', ext: '2005', status: 'Wrap-up', department: 'Support' },
+  { id: 6, name: 'Raj Patel', ext: '2006', status: 'Available', department: 'Sales' },
+  { id: 7, name: 'Emma Wilson', ext: '2007', status: 'Busy', department: 'Escalation' },
+];
+
+const QUEUES_INIT = [
+  { name: 'Support', avgHandle: '6:30', sla: 82, callers: [
+    { id: 'q1', number: '+1 (555) 234-8901', waitSec: 252, reason: 'Order status inquiry', priority: 'normal' },
+    { id: 'q2', number: '+1 (555) 876-5432', waitSec: 185, reason: 'Technical support', priority: 'normal' },
+    { id: 'q3', number: '+1 (555) 111-2233', waitSec: 48, reason: 'Account access issue', priority: 'high' },
+  ]},
+  { name: 'Sales', avgHandle: '8:15', sla: 94, callers: [
+    { id: 'q4', number: '+1 (555) 444-7788', waitSec: 105, reason: 'Pricing inquiry', priority: 'normal' },
+  ]},
+  { name: 'Billing', avgHandle: '4:45', sla: 68, callers: [
+    { id: 'q5', number: '+44 20 7946 0958', waitSec: 440, reason: 'Disputed charge', priority: 'high' },
+    { id: 'q6', number: '+1 (555) 999-0001', waitSec: 310, reason: 'Payment plan request', priority: 'normal' },
+    { id: 'q7', number: '+1 (555) 888-3344', waitSec: 220, reason: 'Refund status', priority: 'normal' },
+    { id: 'q8', number: '+1 (555) 777-6655', waitSec: 130, reason: 'Invoice correction', priority: 'normal' },
+    { id: 'q9', number: '+1 (555) 666-9900', waitSec: 65, reason: 'Auto-pay setup', priority: 'low' },
+  ]},
+];
+
+const DEPARTMENTS = ['Support', 'Sales', 'Billing', 'Escalation'];
+
+// Voice sentiment simulation timeline — evolves as conversation progresses
+const SENTIMENT_TIMELINE = [
+  { agitation: 0.25, frustration: 0.15, engagement: 0.70, avg_pitch_hz: 185, speaking_rate_wpm: 140, avg_energy: 0.45, energy_trend: 'stable', pitch_variance: 12, silence_ratio: 0.20, sentiment: 'neutral', confidence: 0.82 },
+  { agitation: 0.30, frustration: 0.20, engagement: 0.65, avg_pitch_hz: 190, speaking_rate_wpm: 145, avg_energy: 0.48, energy_trend: 'rising', pitch_variance: 18, silence_ratio: 0.18, sentiment: 'neutral', confidence: 0.85 },
+  { agitation: 0.55, frustration: 0.50, engagement: 0.80, avg_pitch_hz: 220, speaking_rate_wpm: 168, avg_energy: 0.62, energy_trend: 'rising', pitch_variance: 28, silence_ratio: 0.12, sentiment: 'negative', confidence: 0.90 },
+  { agitation: 0.70, frustration: 0.65, engagement: 0.85, avg_pitch_hz: 235, speaking_rate_wpm: 175, avg_energy: 0.70, energy_trend: 'rising', pitch_variance: 35, silence_ratio: 0.08, sentiment: 'negative', confidence: 0.93 },
+  { agitation: 0.60, frustration: 0.55, engagement: 0.78, avg_pitch_hz: 215, speaking_rate_wpm: 160, avg_energy: 0.58, energy_trend: 'falling', pitch_variance: 22, silence_ratio: 0.15, sentiment: 'negative', confidence: 0.88 },
+  { agitation: 0.35, frustration: 0.25, engagement: 0.72, avg_pitch_hz: 195, speaking_rate_wpm: 142, avg_energy: 0.50, energy_trend: 'falling', pitch_variance: 15, silence_ratio: 0.18, sentiment: 'neutral', confidence: 0.86 },
+  { agitation: 0.15, frustration: 0.10, engagement: 0.82, avg_pitch_hz: 180, speaking_rate_wpm: 135, avg_energy: 0.42, energy_trend: 'stable', pitch_variance: 10, silence_ratio: 0.22, sentiment: 'positive', confidence: 0.91 },
+  { agitation: 0.10, frustration: 0.05, engagement: 0.88, avg_pitch_hz: 175, speaking_rate_wpm: 130, avg_energy: 0.40, energy_trend: 'stable', pitch_variance: 8, silence_ratio: 0.25, sentiment: 'positive', confidence: 0.94 },
+];
+
+// AI copilot suggestions — contextual tips that stream alongside the conversation
+const AI_COPILOT_SUGGESTIONS = [
+  { category: 'answer', text: 'Order ORD-2024-78432 has a warehouse hold. Address verification required — cleared in system.', confidence: 0.92 },
+  { category: 'empathy', text: 'Customer has been waiting 5 days. Acknowledge the delay and apologize for the inconvenience.', confidence: 0.88 },
+  { category: 'compliance', text: 'Expedited shipping waiver requires manager approval for orders over $500. This order is $340 — approved.', confidence: 0.95 },
+  { category: 'answer', text: 'Tracking number will be generated once shipment is scanned. Typically within 1-2 hours.', confidence: 0.90 },
+  { category: 'upsell', text: 'Customer may benefit from Premium membership — free expedited shipping on all future orders.', confidence: 0.72 },
+];
+
+// Post-call summary structure (shown after call ends)
+const POST_CALL_SUMMARY = {
+  summary: 'Customer called about delayed order ORD-2024-78432. Root cause was a warehouse hold due to address verification. Agent cleared the hold and expedited shipment at no extra cost. Customer satisfied with resolution.',
+  action_items: [
+    'Send tracking number to customer within 2 hours',
+    'Flag address verification process for review — customer was not notified',
+    'Follow up in 3 days to confirm delivery',
+  ],
+  sentiment: 'positive',
+  resolution: 'resolved',
+  duration: 0,
+  csat_prediction: 4.2,
+  topics: ['order-status', 'shipping', 'warehouse-hold'],
+};
+
+const TRANSCRIPT_FEED = [
+  { speaker: 'customer', text: "Hi, I'm calling about my recent order. It still shows as processing after five days." },
+  { speaker: 'agent', text: "I understand your concern. Let me pull up your account right away. Can you confirm your order number?" },
+  { speaker: 'customer', text: "Sure, it's ORD-2024-78432." },
+  { speaker: 'agent', text: "Thank you. I can see the order here. It looks like there was a hold placed by our warehouse team. Let me check the details." },
+  { speaker: 'customer', text: "A hold? Nobody told me about that. I need this by Friday." },
+  { speaker: 'agent', text: "I completely understand the urgency. The hold was due to an address verification. I'm clearing it now and expediting the shipment at no extra cost." },
+  { speaker: 'customer', text: "Oh, that's great. Will I get a tracking number?" },
+  { speaker: 'agent', text: "Absolutely. You'll receive an email with tracking within the next 2 hours. Is there anything else I can help with?" },
+];
+
+const AI_INSIGHTS = [
+  { type: 'summary', text: 'Customer frustrated about delayed order ORD-2024-78432. Warehouse hold due to address verification.' },
+  { type: 'action', text: 'Clear warehouse hold and expedite shipment. Send tracking number within 2 hours.' },
+  { type: 'sentiment', text: 'Caller sentiment shifted from frustrated → satisfied after resolution offered.' },
+  { type: 'compliance', text: 'Agent correctly offered expedited shipping as goodwill. No policy violations detected.' },
+];
+
+// ─── Utility ───
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function getInitials(name) {
+  return name.split(' ').map(n => n[0]).join('');
+}
+
+// ─── Sub-components ───
+
+function StatusDot({ status, size = 8, pulse = false }) {
+  const color = STATUS_COLORS[status] || 'slate';
+  const colorMap = { emerald: 'bg-emerald-500', rose: 'bg-rose-500', amber: 'bg-amber-500', violet: 'bg-violet-500', cyan: 'bg-cyan-400', slate: 'bg-slate-500' };
+  return (
+    <span className={`inline-block rounded-full ${colorMap[color]} ${pulse ? 'animate-pulse' : ''}`} style={{ width: size, height: size }} />
+  );
+}
+
+function Badge({ children, color = 'slate', className = '' }) {
+  const styles = {
+    emerald: 'bg-emerald-500/12 text-emerald-400 border-emerald-500/20',
+    rose: 'bg-rose-500/12 text-rose-400 border-rose-500/20',
+    amber: 'bg-amber-500/12 text-amber-400 border-amber-500/20',
+    violet: 'bg-violet-500/12 text-violet-400 border-violet-500/20',
+    cyan: 'bg-cyan-500/12 text-cyan-400 border-cyan-500/20',
+    slate: 'bg-slate-500/12 text-slate-400 border-slate-500/20',
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-mono font-medium tracking-wide ${styles[color] || styles.slate} ${className}`}>
+      {children}
+    </span>
+  );
+}
+
+function IconBtn({ icon, label, onClick, active, color = 'slate', size = 'md', disabled = false, className = '' }) {
+  const sizeMap = { sm: 'w-9 h-9', md: 'w-12 h-12', lg: 'w-14 h-14' };
+  const iconSize = { sm: 16, md: 20, lg: 22 };
+  const colorMap = {
+    emerald: active ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 glow-emerald' : 'bg-emerald-500/8 text-emerald-400/70 border-emerald-500/15 hover:bg-emerald-500/15',
+    rose: active ? 'bg-rose-500/20 text-rose-400 border-rose-500/30 glow-rose' : 'bg-rose-500/8 text-rose-400/70 border-rose-500/15 hover:bg-rose-500/15',
+    amber: active ? 'bg-amber-500/20 text-amber-400 border-amber-500/30 glow-amber' : 'bg-amber-500/8 text-amber-400/70 border-amber-500/15 hover:bg-amber-500/15',
+    cyan: active ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30 glow-cyan' : 'bg-cyan-500/8 text-cyan-400/70 border-cyan-500/15 hover:bg-cyan-500/15',
+    slate: 'bg-white/[0.04] text-slate-400 border-white/[0.06] hover:bg-white/[0.08]',
+  };
+
+  return (
+    <button
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      className={`btn-action ${sizeMap[size]} rounded-xl border flex flex-col items-center justify-center gap-1 ${colorMap[color]} ${disabled ? 'opacity-30 cursor-not-allowed' : ''} ${className}`}
+      title={label}
+    >
+      <span dangerouslySetInnerHTML={{ __html: lucide.icons[icon]?.toSvg({ width: iconSize[size], height: iconSize[size], 'stroke-width': 1.8 }) || '' }} />
+      {label && size !== 'sm' && <span className="text-[8px] font-mono tracking-wider opacity-70">{label}</span>}
+    </button>
+  );
+}
+
+// ─── WebRTC Health Indicator ───
+function WebRTCHealth({ callState }) {
+  const isActive = callState === CALL_STATES.CONNECTED || callState === CALL_STATES.HOLD || callState === CALL_STATES.MUTED;
+  const [latency, setLatency] = useState(24);
+  const [jitter, setJitter] = useState(2);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const iv = setInterval(() => {
+      setLatency(Math.floor(18 + Math.random() * 20));
+      setJitter(Math.floor(1 + Math.random() * 5));
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [isActive]);
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-overlay border border-white/[0.04]">
+      {/* SIP Registration */}
+      <div className="flex items-center gap-1.5">
+        <StatusDot status={isActive ? 'Available' : 'Busy'} size={6} pulse={isActive} />
+        <span className="text-[9px] font-mono text-slate-500 tracking-wider">SIP</span>
+      </div>
+      <div className="w-px h-4 bg-white/[0.06]" />
+
+      {/* Latency */}
+      <div className="flex items-center gap-1.5">
+        <span className={`text-[10px] font-mono font-semibold ${latency < 30 ? 'text-emerald-400' : latency < 60 ? 'text-amber-400' : 'text-rose-400'}`}>{latency}ms</span>
+        <span className="text-[9px] font-mono text-slate-600">RTT</span>
+      </div>
+      <div className="w-px h-4 bg-white/[0.06]" />
+
+      {/* Jitter */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] font-mono text-slate-400">{jitter}ms</span>
+        <span className="text-[9px] font-mono text-slate-600">JTR</span>
+      </div>
+      <div className="w-px h-4 bg-white/[0.06]" />
+
+      {/* Audio meters */}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0.5">
+          <span className="text-[9px] font-mono text-slate-600">IN</span>
+          <AudioMeter active={isActive && callState !== CALL_STATES.HOLD} />
+        </div>
+        <div className="flex items-center gap-0.5">
+          <span className="text-[9px] font-mono text-slate-600">OUT</span>
+          <AudioMeter active={isActive && callState !== CALL_STATES.MUTED && callState !== CALL_STATES.HOLD} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AudioMeter({ active }) {
+  const [levels, setLevels] = useState([0.2, 0.3, 0.5, 0.3, 0.2]);
+  useEffect(() => {
+    if (!active) { setLevels([0.1, 0.1, 0.1, 0.1, 0.1]); return; }
+    const iv = setInterval(() => {
+      setLevels(Array.from({ length: 5 }, () => 0.15 + Math.random() * 0.85));
+    }, 120);
+    return () => clearInterval(iv);
+  }, [active]);
+  return (
+    <div className="flex items-end gap-px h-3">
+      {levels.map((l, i) => (
+        <div key={i} className={`w-[3px] rounded-sm transition-all duration-100 ${active ? 'bg-emerald-400' : 'bg-slate-700'}`} style={{ height: `${l * 100}%` }} />
+      ))}
+    </div>
+  );
+}
+
+// ─── Dial Pad ───
+function DialPad({ onDial, onDigit, visible, onToggle }) {
+  const keys = [
+    ['1','2','3'], ['4','5','6'], ['7','8','9'], ['*','0','#']
+  ];
+  const sub = { '2':'ABC', '3':'DEF', '4':'GHI', '5':'JKL', '6':'MNO', '7':'PQRS', '8':'TUV', '9':'WXYZ' };
+
+  if (!visible) return null;
+
+  return (
+    <div className="animate-slide-up">
+      <div className="grid grid-cols-3 gap-1.5 mb-3">
+        {keys.flat().map(k => (
+          <button key={k} onClick={() => onDigit(k)}
+            className="dialpad-btn h-12 rounded-lg bg-surface-overlay border border-white/[0.04] flex flex-col items-center justify-center">
+            <span className="text-lg font-mono text-slate-200">{k}</span>
+            {sub[k] && <span className="text-[8px] font-mono text-slate-600 tracking-[0.2em]">{sub[k]}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Transfer Panel ───
+function TransferPanel({ visible, agents, onBlindTransfer, onAttendedTransfer, onClose }) {
+  const [mode, setMode] = useState('blind');
+  const [search, setSearch] = useState('');
+
+  if (!visible) return null;
+
+  const available = agents.filter(a =>
+    (a.status === 'Available') && a.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="animate-slide-up panel p-4">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[10px] font-mono text-slate-500 tracking-wider">TRANSFER CALL</span>
+        <button onClick={onClose} className="text-slate-500 hover:text-slate-300">
+          <span dangerouslySetInnerHTML={{ __html: lucide.icons['x']?.toSvg({ width: 14, height: 14 }) }} />
+        </button>
+      </div>
+
+      {/* Mode toggle */}
+      <div className="flex gap-1 mb-3 p-0.5 rounded-lg bg-surface-overlay">
+        {['blind', 'attended'].map(m => (
+          <button key={m} onClick={() => setMode(m)}
+            className={`flex-1 py-1.5 rounded-md text-[10px] font-mono tracking-wider transition-colors ${mode === m ? 'bg-cyan-500/15 text-cyan-400' : 'text-slate-500 hover:text-slate-400'}`}>
+            {m === 'blind' ? 'BLIND' : 'ATTENDED'}
+          </button>
+        ))}
+      </div>
+
+      {/* Departments */}
+      <div className="flex gap-1.5 mb-3 flex-wrap">
+        {DEPARTMENTS.map(d => (
+          <button key={d} onClick={() => mode === 'blind' ? onBlindTransfer(d) : onAttendedTransfer(d)}
+            className="px-2.5 py-1 rounded-md bg-surface-overlay border border-white/[0.04] text-[10px] font-mono text-slate-400 hover:text-cyan-400 hover:border-cyan-500/20 transition-colors">
+            {d}
+          </button>
+        ))}
+      </div>
+
+      <input value={search} onChange={e => setSearch(e.target.value)}
+        placeholder="Search agents..."
+        className="w-full px-3 py-2 rounded-md bg-surface-overlay border border-white/[0.06] text-sm text-slate-300 font-mono placeholder:text-slate-700 mb-2" />
+
+      <div className="max-h-32 overflow-y-auto space-y-1">
+        {available.map(a => (
+          <button key={a.id} onClick={() => mode === 'blind' ? onBlindTransfer(a.name) : onAttendedTransfer(a.name)}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-cyan-500/[0.05] transition-colors text-left">
+            <StatusDot status={a.status} size={6} />
+            <span className="text-xs text-slate-300">{a.name}</span>
+            <span className="text-[10px] font-mono text-slate-600 ml-auto">x{a.ext}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Queue Monitor with Pick Call ───
+function QueueMonitor({ queues, onPickCall, callActive }) {
+  const [expandedQueue, setExpandedQueue] = useState(null);
+
+  return (
+    <div className="space-y-2">
+      {queues.map(q => {
+        const waiting = q.callers.length;
+        const maxWaitSec = q.callers.length > 0 ? Math.max(...q.callers.map(c => c.waitSec)) : 0;
+        const maxWait = formatTime(maxWaitSec);
+        const slaColor = q.sla >= 90 ? 'emerald' : q.sla >= 75 ? 'amber' : 'rose';
+        const slaText = { emerald: 'text-emerald-400', amber: 'text-amber-400', rose: 'text-rose-400' };
+        const slaBg = { emerald: 'bg-emerald-500', amber: 'bg-amber-500', rose: 'bg-rose-500' };
+        const isExpanded = expandedQueue === q.name;
+
+        return (
+          <div key={q.name} className="rounded-lg bg-surface-overlay border border-white/[0.04] overflow-hidden">
+            {/* Queue summary row — clickable to expand */}
+            <button onClick={() => setExpandedQueue(isExpanded ? null : q.name)}
+              className="w-full px-3 py-2.5 text-left hover:bg-white/[0.02] transition-colors">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className={`transition-transform duration-200 text-slate-600 ${isExpanded ? 'rotate-90' : ''}`}
+                    dangerouslySetInnerHTML={{ __html: lucide.icons['chevron-right']?.toSvg({ width: 11, height: 11, 'stroke-width': 2 }) }} />
+                  <span className="text-xs font-medium text-slate-300">{q.name}</span>
+                </div>
+                <span className={`text-[10px] font-mono font-semibold ${waiting > 3 ? 'text-rose-400' : waiting > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {waiting} waiting
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-[10px] font-mono text-slate-500 pl-4">
+                <span>Max: <span className={maxWaitSec > 300 ? 'text-rose-400' : maxWaitSec > 180 ? 'text-amber-400' : 'text-slate-400'}>{maxWait}</span></span>
+                <span>Avg: {q.avgHandle}</span>
+                <span className="ml-auto">SLA: <span className={slaText[slaColor]}>{q.sla}%</span></span>
+              </div>
+              <div className="mt-1.5 h-1 rounded-full bg-white/[0.04] overflow-hidden ml-4">
+                <div className={`h-full rounded-full ${slaBg[slaColor]} transition-all duration-500`} style={{ width: `${q.sla}%` }} />
+              </div>
+            </button>
+
+            {/* Expanded caller list */}
+            {isExpanded && q.callers.length > 0 && (
+              <div className="border-t border-white/[0.04] animate-slide-up">
+                {q.callers
+                  .sort((a, b) => b.waitSec - a.waitSec)
+                  .map(caller => {
+                  const waitColor = caller.waitSec > 300 ? 'text-rose-400' : caller.waitSec > 180 ? 'text-amber-400' : 'text-slate-400';
+                  const prioStyle = {
+                    high: 'bg-rose-500/15 text-rose-400 border-rose-500/20',
+                    normal: 'bg-slate-500/10 text-slate-500 border-slate-500/15',
+                    low: 'bg-slate-500/8 text-slate-600 border-slate-500/10',
+                  };
+                  return (
+                    <div key={caller.id} className="px-3 py-2 flex items-center gap-2 border-b border-white/[0.02] last:border-0 group hover:bg-white/[0.02] transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-[11px] font-mono text-slate-300">{caller.number}</span>
+                          {caller.priority !== 'normal' && (
+                            <span className={`inline-flex items-center px-1.5 py-0 rounded border text-[8px] font-mono font-semibold tracking-wider ${prioStyle[caller.priority]}`}>
+                              {caller.priority === 'high' ? 'HIGH' : 'LOW'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-600 truncate">{caller.reason}</span>
+                          <span className={`text-[10px] font-mono font-semibold shrink-0 ${waitColor}`}>{formatTime(caller.waitSec)}</span>
+                        </div>
+                      </div>
+                      {/* Pick up button */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onPickCall(caller, q.name); }}
+                        disabled={callActive}
+                        className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-[10px] font-mono tracking-wider transition-all btn-action ${
+                          callActive
+                            ? 'bg-white/[0.02] text-slate-700 border-white/[0.04] cursor-not-allowed'
+                            : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20 glow-emerald'
+                        }`}
+                        title={callActive ? 'End current call first' : `Pick up ${caller.number}`}
+                      >
+                        <span dangerouslySetInnerHTML={{ __html: lucide.icons['phone-incoming']?.toSvg({ width: 12, height: 12, 'stroke-width': 2 }) }} />
+                        PICK
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Expanded but empty */}
+            {isExpanded && q.callers.length === 0 && (
+              <div className="border-t border-white/[0.04] px-3 py-3 text-center animate-fade-in">
+                <span className="text-[10px] font-mono text-slate-700">Queue empty</span>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Agent Directory ───
+function AgentDirectory({ agents, onTransfer, onConference, callActive }) {
+  return (
+    <div className="space-y-0.5">
+      {agents.map(a => {
+        const color = STATUS_COLORS[a.status] || 'slate';
+        return (
+          <div key={a.id} className="agent-row flex items-center gap-2 px-2 py-2 rounded-md transition-colors group">
+            <div className="w-7 h-7 rounded-full bg-white/[0.06] flex items-center justify-center shrink-0">
+              <span className="text-[10px] font-mono text-slate-400">{getInitials(a.name)}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-slate-300 truncate">{a.name}</div>
+              <div className="flex items-center gap-1.5">
+                <StatusDot status={a.status} size={5} pulse={a.status === 'Available'} />
+                <span className="text-[9px] font-mono text-slate-600">{a.status}</span>
+              </div>
+            </div>
+            {callActive && a.status === 'Available' && (
+              <div className="hidden group-hover:flex gap-1 animate-fade-in">
+                <button onClick={() => onTransfer(a)} title="Transfer"
+                  className="w-6 h-6 rounded-md bg-cyan-500/10 text-cyan-400 flex items-center justify-center hover:bg-cyan-500/20">
+                  <span dangerouslySetInnerHTML={{ __html: lucide.icons['arrow-right-left']?.toSvg({ width: 12, height: 12, 'stroke-width': 2 }) }} />
+                </button>
+                <button onClick={() => onConference(a)} title="Conference"
+                  className="w-6 h-6 rounded-md bg-violet-500/10 text-violet-400 flex items-center justify-center hover:bg-violet-500/20">
+                  <span dangerouslySetInnerHTML={{ __html: lucide.icons['users']?.toSvg({ width: 12, height: 12, 'stroke-width': 2 }) }} />
+                </button>
+              </div>
+            )}
+            <span className="text-[10px] font-mono text-slate-700 group-hover:hidden">x{a.ext}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Caller Mood Gauge ───
+function CallerMoodGauge({ sentiment, isActive }) {
+  if (!isActive || !sentiment) {
+    return (
+      <div className="px-3 py-3 border-b border-white/[0.05]">
+        <span className="text-[10px] font-mono text-slate-500 tracking-wider block mb-2">CALLER MOOD</span>
+        <div className="flex items-center justify-center py-4">
+          <span className="text-[10px] font-mono text-slate-700">No active call</span>
+        </div>
+      </div>
+    );
+  }
+
+  const mood = sentiment.frustration > 0.6 ? 'FRUSTRATED' :
+               sentiment.agitation > 0.5 ? 'AGITATED' :
+               sentiment.engagement > 0.7 ? 'ENGAGED' : 'CALM';
+  const moodColor = sentiment.frustration > 0.6 ? 'rose' :
+                    sentiment.agitation > 0.5 ? 'amber' :
+                    sentiment.engagement > 0.7 ? 'emerald' : 'cyan';
+  const moodBorder = { rose: 'border-rose-500/20', amber: 'border-amber-500/20', emerald: 'border-emerald-500/20', cyan: 'border-cyan-500/20' };
+  const moodGlow = { rose: 'glow-rose', amber: 'glow-amber', emerald: 'glow-emerald', cyan: 'glow-cyan' };
+  const moodBg = { rose: 'bg-rose-500', amber: 'bg-amber-500', emerald: 'bg-emerald-500', cyan: 'bg-cyan-400' };
+  const moodText = { rose: 'text-rose-400', amber: 'text-amber-400', emerald: 'text-emerald-400', cyan: 'text-cyan-400' };
+
+  function GaugeBar({ label, value, thresholds }) {
+    const color = value > (thresholds?.high || 0.6) ? 'bg-rose-500' :
+                  value > (thresholds?.mid || 0.3) ? 'bg-amber-500' : 'bg-emerald-500';
+    const textColor = value > (thresholds?.high || 0.6) ? 'text-rose-400' :
+                      value > (thresholds?.mid || 0.3) ? 'text-amber-400' : 'text-emerald-400';
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[9px] font-mono text-slate-600 w-8 shrink-0">{label}</span>
+        <div className="flex-1 h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+          <div className={`h-full rounded-full ${color} transition-all duration-700`} style={{ width: `${Math.round(value * 100)}%` }} />
+        </div>
+        <span className={`text-[10px] font-mono font-semibold w-8 text-right ${textColor}`}>{Math.round(value * 100)}%</span>
+      </div>
+    );
+  }
+
+  function GaugeBarInverted({ label, value, thresholds }) {
+    const color = value > (thresholds?.high || 0.6) ? 'bg-emerald-500' :
+                  value > (thresholds?.mid || 0.3) ? 'bg-amber-500' : 'bg-rose-500';
+    const textColor = value > (thresholds?.high || 0.6) ? 'text-emerald-400' :
+                      value > (thresholds?.mid || 0.3) ? 'text-amber-400' : 'text-rose-400';
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[9px] font-mono text-slate-600 w-8 shrink-0">{label}</span>
+        <div className="flex-1 h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+          <div className={`h-full rounded-full ${color} transition-all duration-700`} style={{ width: `${Math.round(value * 100)}%` }} />
+        </div>
+        <span className={`text-[10px] font-mono font-semibold w-8 text-right ${textColor}`}>{Math.round(value * 100)}%</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`px-3 py-3 border-b ${moodBorder[moodColor]} transition-colors duration-500`}>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[10px] font-mono text-slate-500 tracking-wider">CALLER MOOD</span>
+        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full border ${moodBorder[moodColor]} ${moodGlow[moodColor]}`}>
+          <span className={`w-2 h-2 rounded-full ${moodBg[moodColor]} animate-pulse`} />
+          <span className={`text-[10px] font-mono font-semibold tracking-wider ${moodText[moodColor]}`}>{mood}</span>
+        </div>
+      </div>
+
+      <div className="space-y-2 mb-3">
+        <GaugeBar label="FRS" value={sentiment.frustration} thresholds={{ mid: 0.3, high: 0.6 }} />
+        <GaugeBar label="AGT" value={sentiment.agitation} thresholds={{ mid: 0.3, high: 0.5 }} />
+        <GaugeBarInverted label="ENG" value={sentiment.engagement} thresholds={{ mid: 0.4, high: 0.7 }} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[9px] font-mono">
+        <div className="flex justify-between">
+          <span className="text-slate-600">Pitch</span>
+          <span className="text-slate-400">{sentiment.avg_pitch_hz.toFixed(0)} Hz</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-slate-600">Speed</span>
+          <span className="text-slate-400">{sentiment.speaking_rate_wpm.toFixed(0)} wpm</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-slate-600">Energy</span>
+          <span className={`${sentiment.energy_trend === 'rising' ? 'text-amber-400' : sentiment.energy_trend === 'falling' ? 'text-emerald-400' : 'text-slate-400'}`}>
+            {sentiment.energy_trend === 'rising' ? '↑' : sentiment.energy_trend === 'falling' ? '↓' : '↔'} {sentiment.energy_trend}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-slate-600">Silence</span>
+          <span className="text-slate-400">{(sentiment.silence_ratio * 100).toFixed(0)}%</span>
+        </div>
+      </div>
+
+      {/* Confidence */}
+      <div className="mt-2 pt-2 border-t border-white/[0.03] flex items-center justify-between">
+        <span className="text-[9px] font-mono text-slate-700">AI confidence</span>
+        <span className="text-[9px] font-mono text-slate-500">{(sentiment.confidence * 100).toFixed(0)}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Copilot Suggestions ───
+function AICopilotPanel({ suggestions, isActive }) {
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [suggestions]);
+
+  const catStyle = {
+    answer: { bg: 'bg-cyan-500/[0.06]', border: 'border-cyan-500/15', text: 'text-cyan-400', label: 'ANSWER', icon: 'message-circle' },
+    empathy: { bg: 'bg-violet-500/[0.06]', border: 'border-violet-500/15', text: 'text-violet-400', label: 'EMPATHY', icon: 'heart' },
+    compliance: { bg: 'bg-amber-500/[0.06]', border: 'border-amber-500/15', text: 'text-amber-400', label: 'COMPLIANCE', icon: 'shield-check' },
+    upsell: { bg: 'bg-pink-500/[0.06]', border: 'border-pink-500/15', text: 'text-pink-400', label: 'UPSELL', icon: 'trending-up' },
+  };
+
+  if (!isActive) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <span className="text-[10px] font-mono text-slate-700">Connect a call for AI assist</span>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={scrollRef} className="h-full overflow-y-auto space-y-2 px-1">
+      {suggestions.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-8 gap-2">
+          <div className="flex gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+          <span className="text-[10px] font-mono text-slate-600">Analyzing conversation...</span>
+        </div>
+      )}
+      {suggestions.map((s, i) => {
+        const style = catStyle[s.category] || catStyle.answer;
+        return (
+          <div key={i} className={`p-2.5 rounded-lg ${style.bg} border ${style.border} animate-slide-up`}>
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className={style.text} dangerouslySetInnerHTML={{ __html: lucide.icons[style.icon]?.toSvg({ width: 11, height: 11, 'stroke-width': 2 }) }} />
+                <span className={`text-[9px] font-mono font-semibold tracking-wider ${style.text}`}>{style.label}</span>
+              </div>
+              <span className="text-[9px] font-mono text-slate-600">{Math.round(s.confidence * 100)}%</span>
+            </div>
+            <p className="text-[12px] text-slate-300 leading-relaxed">{s.text}</p>
+            {s.time && <span className="text-[9px] font-mono text-slate-700 mt-1 block">{s.time}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Post-Call Summary ───
+function PostCallSummary({ summary, duration, visible, onDismiss }) {
+  if (!visible || !summary) return null;
+
+  const sentColor = { positive: 'emerald', negative: 'rose', neutral: 'slate' };
+  const resColor = { resolved: 'emerald', escalated: 'amber', unresolved: 'rose' };
+
+  return (
+    <div className="absolute inset-0 bg-surface-base/90 backdrop-blur-sm z-40 flex items-center justify-center p-8 animate-fade-in">
+      <div className="w-full max-w-2xl panel p-6 space-y-5 animate-slide-up" style={{ boxShadow: '0 0 40px rgba(6, 182, 212, 0.08)' }}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center">
+              <span className="text-emerald-400" dangerouslySetInnerHTML={{ __html: lucide.icons['check-circle']?.toSvg({ width: 20, height: 20, 'stroke-width': 1.8 }) }} />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-slate-200">Call Complete</h2>
+              <span className="text-[10px] font-mono text-slate-500">Duration: {formatTime(duration)}</span>
+            </div>
+          </div>
+          <button onClick={onDismiss}
+            className="w-8 h-8 rounded-lg bg-white/[0.04] border border-white/[0.06] flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-white/[0.08] transition-colors">
+            <span dangerouslySetInnerHTML={{ __html: lucide.icons['x']?.toSvg({ width: 16, height: 16 }) }} />
+          </button>
+        </div>
+
+        {/* Metrics row */}
+        <div className="grid grid-cols-4 gap-3">
+          <div className="px-3 py-2.5 rounded-lg bg-surface-overlay border border-white/[0.04] text-center">
+            <div className="text-[9px] font-mono text-slate-600 tracking-wider mb-1">SENTIMENT</div>
+            <Badge color={sentColor[summary.sentiment]}>{summary.sentiment.toUpperCase()}</Badge>
+          </div>
+          <div className="px-3 py-2.5 rounded-lg bg-surface-overlay border border-white/[0.04] text-center">
+            <div className="text-[9px] font-mono text-slate-600 tracking-wider mb-1">RESOLUTION</div>
+            <Badge color={resColor[summary.resolution]}>{summary.resolution.toUpperCase()}</Badge>
+          </div>
+          <div className="px-3 py-2.5 rounded-lg bg-surface-overlay border border-white/[0.04] text-center">
+            <div className="text-[9px] font-mono text-slate-600 tracking-wider mb-1">CSAT PRED</div>
+            <span className={`text-lg font-mono font-semibold ${summary.csat_prediction >= 4 ? 'text-emerald-400' : summary.csat_prediction >= 3 ? 'text-amber-400' : 'text-rose-400'}`}>
+              {summary.csat_prediction.toFixed(1)}
+            </span>
+          </div>
+          <div className="px-3 py-2.5 rounded-lg bg-surface-overlay border border-white/[0.04] text-center">
+            <div className="text-[9px] font-mono text-slate-600 tracking-wider mb-1">DURATION</div>
+            <span className="text-lg font-mono font-semibold text-cyan-400">{formatTime(duration)}</span>
+          </div>
+        </div>
+
+        {/* AI Summary */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="text-violet-400" dangerouslySetInnerHTML={{ __html: lucide.icons['sparkles']?.toSvg({ width: 13, height: 13, 'stroke-width': 2 }) }} />
+            <span className="text-[10px] font-mono text-violet-400 tracking-wider">AI GENERATED SUMMARY</span>
+          </div>
+          <p className="text-sm text-slate-300 leading-relaxed bg-surface-overlay rounded-lg p-3 border border-white/[0.04]">{summary.summary}</p>
+        </div>
+
+        {/* Action Items */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="text-emerald-400" dangerouslySetInnerHTML={{ __html: lucide.icons['list-checks']?.toSvg({ width: 13, height: 13, 'stroke-width': 2 }) }} />
+            <span className="text-[10px] font-mono text-emerald-400 tracking-wider">ACTION ITEMS</span>
+          </div>
+          <div className="space-y-1.5">
+            {summary.action_items.map((item, i) => (
+              <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-md bg-surface-overlay border border-white/[0.04]">
+                <span className="text-emerald-400 mt-0.5 shrink-0" dangerouslySetInnerHTML={{ __html: lucide.icons['circle-dot']?.toSvg({ width: 12, height: 12, 'stroke-width': 2 }) }} />
+                <span className="text-[12px] text-slate-300 leading-relaxed">{item}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Topics */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[9px] font-mono text-slate-600">Topics:</span>
+          {summary.topics.map(t => (
+            <span key={t} className="px-2 py-0.5 rounded-full bg-white/[0.04] border border-white/[0.06] text-[10px] font-mono text-slate-500">{t}</span>
+          ))}
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-3 pt-2 border-t border-white/[0.05]">
+          <button onClick={onDismiss}
+            className="flex-1 py-2.5 rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/15 font-mono text-xs tracking-wider hover:bg-cyan-500/15 transition-colors flex items-center justify-center gap-2">
+            <span dangerouslySetInnerHTML={{ __html: lucide.icons['clipboard-copy']?.toSvg({ width: 14, height: 14, 'stroke-width': 2 }) }} />
+            COPY TO CRM
+          </button>
+          <button onClick={onDismiss}
+            className="flex-1 py-2.5 rounded-lg bg-white/[0.04] text-slate-400 border border-white/[0.06] font-mono text-xs tracking-wider hover:bg-white/[0.06] transition-colors">
+            DISMISS
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Notes Panel ───
+function NotesPanel({ notes, onChange }) {
+  return (
+    <textarea
+      value={notes}
+      onChange={e => onChange(e.target.value)}
+      placeholder="Type call notes here..."
+      className="w-full h-full px-3 py-2.5 bg-transparent text-sm text-slate-300 placeholder:text-slate-700 font-sans leading-relaxed"
+    />
+  );
+}
+
+// ─── AI Transcript ───
+function AITranscriptPanel({ entries, insights }) {
+  const scrollRef = useRef(null);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [entries, insights]);
+
+  const insightIcon = { summary: 'file-text', action: 'check-circle', sentiment: 'heart', compliance: 'shield-check' };
+  const insightColor = { summary: 'text-cyan-400', action: 'text-emerald-400', sentiment: 'text-violet-400', compliance: 'text-amber-400' };
+
+  return (
+    <div ref={scrollRef} className="h-full overflow-y-auto px-1 space-y-3">
+      {entries.map((e, i) => (
+        <div key={`t-${i}`} className="transcript-entry">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className={`text-[9px] font-mono font-semibold tracking-wider ${e.speaker === 'customer' ? 'text-cyan-400' : 'text-emerald-400'}`}>
+              {e.speaker === 'customer' ? 'CALLER' : 'AGENT'}
+            </span>
+            <span className="text-[9px] font-mono text-slate-700">{e.time}</span>
+          </div>
+          <p className="text-[13px] text-slate-400 leading-relaxed">{e.text}</p>
+        </div>
+      ))}
+      {insights.length > 0 && (
+        <div className="pt-2 border-t border-violet-500/10 space-y-2">
+          <span className="text-[9px] font-mono text-violet-400 tracking-wider">AI INSIGHTS</span>
+          {insights.map((ins, i) => (
+            <div key={`i-${i}`} className="flex gap-2 p-2 rounded-md bg-violet-500/[0.04] border border-violet-500/10 animate-slide-up">
+              <span className={`shrink-0 mt-0.5 ${insightColor[ins.type]}`}
+                dangerouslySetInnerHTML={{ __html: lucide.icons[insightIcon[ins.type]]?.toSvg({ width: 13, height: 13, 'stroke-width': 1.8 }) }} />
+              <p className="text-[12px] text-slate-400 leading-relaxed">{ins.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {entries.length === 0 && (
+        <div className="h-full flex items-center justify-center">
+          <span className="text-xs text-slate-700 font-mono">Waiting for call...</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Console ───
+function CallingConsole() {
+  // Core state
+  const [callState, setCallState] = useState(CALL_STATES.IDLE);
+  const [agentStatus, setAgentStatus] = useState('Available');
+  const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [showDialpad, setShowDialpad] = useState(false);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [callDuration, setCallDuration] = useState(0);
+  const [notes, setNotes] = useState('');
+  const [showNotesDrawer, setShowNotesDrawer] = useState(false);
+
+  // Transcript simulation
+  const [transcriptEntries, setTranscriptEntries] = useState([]);
+  const [aiInsights, setAiInsights] = useState([]);
+  const transcriptIdx = useRef(0);
+  const insightIdx = useRef(0);
+
+  // Voice sentiment (live caller mood)
+  const [voiceSentiment, setVoiceSentiment] = useState(null);
+  const sentimentIdx = useRef(0);
+
+  // AI copilot suggestions
+  const [copilotSuggestions, setCopilotSuggestions] = useState([]);
+  const suggestionIdx = useRef(0);
+
+  // Post-call summary
+  const [showPostCallSummary, setShowPostCallSummary] = useState(false);
+  const [finalCallDuration, setFinalCallDuration] = useState(0);
+
+  // Conference / Transfer state
+  const [conferenceActive, setConferenceActive] = useState(false);
+  const [conferenceParty, setConferenceParty] = useState(null);
+  const [transferTarget, setTransferTarget] = useState(null);
+  const [notification, setNotification] = useState(null);
+
+  // Queue state (with individual callers)
+  const [queues, setQueues] = useState(QUEUES_INIT);
+
+  // Timer
+  useEffect(() => {
+    if (callState !== CALL_STATES.CONNECTED && callState !== CALL_STATES.HOLD && callState !== CALL_STATES.MUTED) return;
+    const iv = setInterval(() => setCallDuration(d => d + 1), 1000);
+    return () => clearInterval(iv);
+  }, [callState]);
+
+  // Simulate transcript streaming when connected
+  useEffect(() => {
+    if (callState !== CALL_STATES.CONNECTED) return;
+    const iv = setInterval(() => {
+      if (transcriptIdx.current < TRANSCRIPT_FEED.length) {
+        const entry = TRANSCRIPT_FEED[transcriptIdx.current];
+        const now = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setTranscriptEntries(prev => [...prev, { ...entry, time: now }]);
+        transcriptIdx.current++;
+      } else if (insightIdx.current < AI_INSIGHTS.length) {
+        setAiInsights(prev => [...prev, AI_INSIGHTS[insightIdx.current]]);
+        insightIdx.current++;
+      }
+    }, 3500);
+    return () => clearInterval(iv);
+  }, [callState]);
+
+  // Simulate voice sentiment evolution — updates every time a new transcript entry arrives
+  useEffect(() => {
+    if (callState !== CALL_STATES.CONNECTED) return;
+    if (sentimentIdx.current < SENTIMENT_TIMELINE.length) {
+      setVoiceSentiment(SENTIMENT_TIMELINE[sentimentIdx.current]);
+      sentimentIdx.current++;
+    }
+  }, [transcriptEntries.length, callState]);
+
+  // Simulate copilot suggestions — one arrives every ~5s during the call
+  useEffect(() => {
+    if (callState !== CALL_STATES.CONNECTED) return;
+    const iv = setInterval(() => {
+      if (suggestionIdx.current < AI_COPILOT_SUGGESTIONS.length) {
+        const s = AI_COPILOT_SUGGESTIONS[suggestionIdx.current];
+        const now = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        setCopilotSuggestions(prev => [...prev, { ...s, time: now }]);
+        suggestionIdx.current++;
+      }
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [callState]);
+
+  // Tick caller wait times every second
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setQueues(prev => prev.map(q => ({
+        ...q,
+        callers: q.callers.map(c => ({ ...c, waitSec: c.waitSec + 1 })),
+      })));
+    }, 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Simulate queue SLA fluctuation
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setQueues(prev => prev.map(q => ({
+        ...q,
+        sla: Math.min(100, Math.max(50, q.sla + (Math.random() > 0.4 ? 1 : -2))),
+      })));
+    }, 8000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Notifications
+  function showNotif(msg, color = 'cyan') {
+    setNotification({ msg, color });
+    setTimeout(() => setNotification(null), 3000);
+  }
+
+  // Call actions
+  function handleDial() {
+    if (!phoneNumber) return;
+    setCallState(CALL_STATES.DIALING);
+    setCallDuration(0);
+    setTranscriptEntries([]);
+    setAiInsights([]);
+    setVoiceSentiment(null);
+    setCopilotSuggestions([]);
+    setShowPostCallSummary(false);
+    transcriptIdx.current = 0;
+    insightIdx.current = 0;
+    sentimentIdx.current = 0;
+    suggestionIdx.current = 0;
+    setConferenceActive(false);
+    setConferenceParty(null);
+    setTimeout(() => setCallState(CALL_STATES.CONNECTED), 2200);
+  }
+
+  function handleEndCall() {
+    setFinalCallDuration(callDuration);
+    setCallState(CALL_STATES.DISCONNECTED);
+    setConferenceActive(false);
+    setConferenceParty(null);
+    setShowTransfer(false);
+    setTimeout(() => {
+      setCallState(CALL_STATES.IDLE);
+      if (transcriptEntries.length > 0) {
+        setShowPostCallSummary(true);
+      }
+    }, 1500);
+  }
+
+  function handleMute() {
+    if (callState === CALL_STATES.MUTED) setCallState(CALL_STATES.CONNECTED);
+    else if (callState === CALL_STATES.CONNECTED) setCallState(CALL_STATES.MUTED);
+  }
+
+  function handleHold() {
+    if (callState === CALL_STATES.HOLD) setCallState(CALL_STATES.CONNECTED);
+    else if (callState === CALL_STATES.CONNECTED || callState === CALL_STATES.MUTED) setCallState(CALL_STATES.HOLD);
+  }
+
+  function handleDigit(d) {
+    setPhoneNumber(prev => prev + d);
+  }
+
+  function handleBlindTransfer(target) {
+    showNotif(`Transferred to ${target}`, 'cyan');
+    setShowTransfer(false);
+    handleEndCall();
+  }
+
+  function handleAttendedTransfer(target) {
+    setTransferTarget(target);
+    setCallState(CALL_STATES.HOLD);
+    showNotif(`Consulting ${target}... Customer on hold`, 'amber');
+    setShowTransfer(false);
+    setTimeout(() => {
+      showNotif(`Connected with ${target}. Merge or complete transfer.`, 'emerald');
+    }, 3000);
+  }
+
+  function handleConference(agent) {
+    setConferenceActive(true);
+    setConferenceParty(agent.name);
+    showNotif(`${agent.name} joined the conference`, 'violet');
+  }
+
+  function handleMergeTransfer() {
+    if (transferTarget) {
+      showNotif(`Call merged with ${transferTarget}`, 'emerald');
+      setConferenceActive(true);
+      setConferenceParty(transferTarget);
+      setCallState(CALL_STATES.CONNECTED);
+      setTransferTarget(null);
+    }
+  }
+
+  function handleCompleteTransfer() {
+    if (transferTarget) {
+      showNotif(`Call transferred to ${transferTarget}`, 'cyan');
+      setTransferTarget(null);
+      handleEndCall();
+    }
+  }
+
+  function handlePickCall(caller, queueName) {
+    if (isCallActive) return;
+    // Remove caller from queue
+    setQueues(prev => prev.map(q =>
+      q.name === queueName
+        ? { ...q, callers: q.callers.filter(c => c.id !== caller.id) }
+        : q
+    ));
+    // Set the number and auto-dial
+    setPhoneNumber(caller.number);
+    showNotif(`Picked up ${caller.number} from ${queueName} queue — ${caller.reason}`, 'emerald');
+    // Start the call
+    setCallState(CALL_STATES.DIALING);
+    setCallDuration(0);
+    setTranscriptEntries([]);
+    setAiInsights([]);
+    setVoiceSentiment(null);
+    setCopilotSuggestions([]);
+    setShowPostCallSummary(false);
+    transcriptIdx.current = 0;
+    insightIdx.current = 0;
+    sentimentIdx.current = 0;
+    suggestionIdx.current = 0;
+    setConferenceActive(false);
+    setConferenceParty(null);
+    setTimeout(() => setCallState(CALL_STATES.CONNECTED), 1200);
+  }
+
+  const isCallActive = [CALL_STATES.CONNECTED, CALL_STATES.HOLD, CALL_STATES.MUTED].includes(callState);
+
+  // State label & color
+  const stateDisplay = {
+    [CALL_STATES.IDLE]: { label: 'READY', color: 'slate', glow: '' },
+    [CALL_STATES.DIALING]: { label: 'DIALING', color: 'cyan', glow: 'glow-cyan' },
+    [CALL_STATES.CONNECTED]: { label: 'CONNECTED', color: 'emerald', glow: 'glow-emerald' },
+    [CALL_STATES.HOLD]: { label: 'ON HOLD', color: 'amber', glow: 'glow-amber' },
+    [CALL_STATES.MUTED]: { label: 'MUTED', color: 'amber', glow: 'glow-amber' },
+    [CALL_STATES.DISCONNECTED]: { label: 'ENDED', color: 'rose', glow: 'glow-rose' },
+  };
+  const cs = stateDisplay[callState];
+
+  return (
+    <div className="h-screen flex flex-col overflow-hidden bg-surface-base">
+      {/* ─── TOP BAR ─── */}
+      <header className="h-12 shrink-0 flex items-center justify-between px-4 border-b border-white/[0.05] bg-surface-overlay">
+        <div className="flex items-center gap-3">
+          {/* Logo */}
+          <div className="w-7 h-7 rounded-md bg-cyan-500/15 flex items-center justify-center">
+            <span dangerouslySetInnerHTML={{ __html: lucide.icons['hexagon']?.toSvg({ width: 14, height: 14, stroke: '#06b6d4', 'stroke-width': 2.5 }) }} />
+          </div>
+          <span className="font-mono text-[11px] font-semibold text-cyan-400 tracking-[0.15em]">VOICEAGENT</span>
+          <div className="w-px h-5 bg-white/[0.06] mx-1" />
+          <span className="text-[11px] font-mono text-slate-500">CONSOLE</span>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <WebRTCHealth callState={callState} />
+
+          {/* Agent Status */}
+          <div className="relative">
+            <button onClick={() => setShowStatusMenu(!showStatusMenu)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-raised border border-white/[0.06] hover:border-white/[0.1] transition-colors">
+              <StatusDot status={agentStatus} size={7} pulse={agentStatus === 'Available'} />
+              <span className="text-xs font-medium text-slate-300">{agentStatus}</span>
+              <span className="text-slate-600" dangerouslySetInnerHTML={{ __html: lucide.icons['chevron-down']?.toSvg({ width: 12, height: 12 }) }} />
+            </button>
+            {showStatusMenu && (
+              <div className="absolute right-0 top-full mt-1 w-40 py-1 rounded-lg bg-surface-raised border border-white/[0.08] shadow-xl z-50 animate-slide-up">
+                {AGENT_STATUSES.map(s => (
+                  <button key={s} onClick={() => { setAgentStatus(s); setShowStatusMenu(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/[0.04] transition-colors ${agentStatus === s ? 'text-cyan-400' : 'text-slate-400'}`}>
+                    <StatusDot status={s} size={6} />
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Agent avatar */}
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500/20 to-violet-500/20 border border-white/[0.08] flex items-center justify-center">
+            <span className="text-[10px] font-mono text-slate-300">KJ</span>
+          </div>
+        </div>
+      </header>
+
+      {/* ─── NOTIFICATION BAR ─── */}
+      {notification && (
+        <div className={`h-8 shrink-0 flex items-center justify-center text-[11px] font-mono tracking-wide animate-slide-up ${
+          notification.color === 'emerald' ? 'bg-emerald-500/10 text-emerald-400' :
+          notification.color === 'amber' ? 'bg-amber-500/10 text-amber-400' :
+          notification.color === 'violet' ? 'bg-violet-500/10 text-violet-400' :
+          notification.color === 'rose' ? 'bg-rose-500/10 text-rose-400' :
+          'bg-cyan-500/10 text-cyan-400'
+        }`}>
+          {notification.msg}
+        </div>
+      )}
+
+      {/* ─── MAIN LAYOUT ─── */}
+      <div className="flex-1 flex overflow-hidden">
+
+        {/* ═══ LEFT COLUMN: Dialer & Directory ═══ */}
+        <div className="w-72 shrink-0 border-r border-white/[0.05] flex flex-col bg-surface-overlay/50">
+          {/* Call State Display */}
+          <div className={`px-4 py-5 border-b border-white/[0.05] ${cs.glow}`}>
+            <div className="flex items-center justify-between mb-3">
+              <Badge color={cs.color}>{cs.label}</Badge>
+              {isCallActive && (
+                <span className="text-lg font-mono font-semibold text-slate-200 tabular-nums">{formatTime(callDuration)}</span>
+              )}
+            </div>
+
+            {/* Phone number input */}
+            <div className="flex items-center gap-2 mb-3">
+              <input
+                value={phoneNumber}
+                onChange={e => setPhoneNumber(e.target.value)}
+                placeholder="+1 (555) 000-0000"
+                className="flex-1 px-3 py-2.5 rounded-lg bg-surface-overlay border border-white/[0.06] text-base font-mono text-slate-200 placeholder:text-slate-700 tabular-nums"
+                onKeyDown={e => e.key === 'Enter' && handleDial()}
+                disabled={isCallActive}
+              />
+              <button onClick={() => setShowDialpad(!showDialpad)}
+                className={`w-10 h-10 rounded-lg border flex items-center justify-center transition-colors ${showDialpad ? 'bg-cyan-500/15 border-cyan-500/20 text-cyan-400' : 'bg-surface-overlay border-white/[0.06] text-slate-500 hover:text-slate-400'}`}>
+                <span dangerouslySetInnerHTML={{ __html: lucide.icons['grid-3x3']?.toSvg({ width: 16, height: 16 }) }} />
+              </button>
+            </div>
+
+            {/* Dial pad */}
+            <DialPad visible={showDialpad} onDigit={handleDigit} />
+
+            {/* Conference info */}
+            {conferenceActive && (
+              <div className="mb-3 px-2.5 py-2 rounded-lg bg-violet-500/[0.06] border border-violet-500/15 animate-slide-up">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="text-violet-400" dangerouslySetInnerHTML={{ __html: lucide.icons['users']?.toSvg({ width: 12, height: 12, 'stroke-width': 2 }) }} />
+                  <span className="text-[10px] font-mono text-violet-400 tracking-wider">3-WAY CONFERENCE</span>
+                </div>
+                <span className="text-xs text-slate-400">{conferenceParty} connected</span>
+              </div>
+            )}
+
+            {/* Attended transfer controls */}
+            {transferTarget && (
+              <div className="mb-3 px-2.5 py-2 rounded-lg bg-amber-500/[0.06] border border-amber-500/15 animate-slide-up">
+                <div className="text-[10px] font-mono text-amber-400 tracking-wider mb-2">CONSULTING: {transferTarget}</div>
+                <div className="flex gap-2">
+                  <button onClick={handleMergeTransfer}
+                    className="flex-1 py-1.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[10px] font-mono hover:bg-emerald-500/20 transition-colors">
+                    MERGE
+                  </button>
+                  <button onClick={handleCompleteTransfer}
+                    className="flex-1 py-1.5 rounded-md bg-cyan-500/15 text-cyan-400 text-[10px] font-mono hover:bg-cyan-500/20 transition-colors">
+                    COMPLETE
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex items-center justify-between">
+              {callState === CALL_STATES.IDLE || callState === CALL_STATES.DISCONNECTED ? (
+                <button onClick={handleDial} disabled={!phoneNumber}
+                  className={`btn-action w-full h-12 rounded-xl font-mono text-sm tracking-wider flex items-center justify-center gap-2 border transition-colors ${phoneNumber ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/25 glow-emerald' : 'bg-white/[0.03] text-slate-600 border-white/[0.04] cursor-not-allowed'}`}>
+                  <span dangerouslySetInnerHTML={{ __html: lucide.icons['phone']?.toSvg({ width: 18, height: 18, 'stroke-width': 2 }) }} />
+                  DIAL
+                </button>
+              ) : callState === CALL_STATES.DIALING ? (
+                <button onClick={handleEndCall}
+                  className="btn-action w-full h-12 rounded-xl bg-rose-500/15 text-rose-400 border border-rose-500/20 font-mono text-sm tracking-wider flex items-center justify-center gap-2 hover:bg-rose-500/25 glow-rose">
+                  <span dangerouslySetInnerHTML={{ __html: lucide.icons['phone-off']?.toSvg({ width: 18, height: 18, 'stroke-width': 2 }) }} />
+                  CANCEL
+                </button>
+              ) : (
+                <div className="flex gap-2 w-full">
+                  <IconBtn icon={callState === CALL_STATES.MUTED ? 'mic-off' : 'mic'} label="MUTE"
+                    onClick={handleMute} active={callState === CALL_STATES.MUTED} color="amber" />
+                  <IconBtn icon={callState === CALL_STATES.HOLD ? 'play' : 'pause'} label={callState === CALL_STATES.HOLD ? 'RESUME' : 'HOLD'}
+                    onClick={handleHold} active={callState === CALL_STATES.HOLD} color="amber" />
+                  <IconBtn icon="arrow-right-left" label="XFER"
+                    onClick={() => setShowTransfer(!showTransfer)} active={showTransfer} color="cyan" />
+                  <button onClick={handleEndCall}
+                    className="btn-action flex-1 h-12 rounded-xl bg-rose-500/15 text-rose-400 border border-rose-500/20 font-mono text-[10px] tracking-wider flex flex-col items-center justify-center gap-0.5 hover:bg-rose-500/25 glow-rose">
+                    <span dangerouslySetInnerHTML={{ __html: lucide.icons['phone-off']?.toSvg({ width: 18, height: 18, 'stroke-width': 2 }) }} />
+                    <span>END</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Transfer panel */}
+          <div className="px-3 pt-2">
+            <TransferPanel visible={showTransfer} agents={TEAM}
+              onBlindTransfer={handleBlindTransfer} onAttendedTransfer={handleAttendedTransfer}
+              onClose={() => setShowTransfer(false)} />
+          </div>
+
+          {/* Dialing animation */}
+          {callState === CALL_STATES.DIALING && (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="relative">
+                <div className="w-16 h-16 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                  <span className="text-cyan-400" dangerouslySetInnerHTML={{ __html: lucide.icons['phone-outgoing']?.toSvg({ width: 24, height: 24, 'stroke-width': 1.8 }) }} />
+                </div>
+                <div className="absolute inset-0 rounded-full border-2 border-cyan-400/40 animate-ring-pulse" />
+                <div className="absolute inset-0 rounded-full border-2 border-cyan-400/20 animate-ring-pulse" style={{ animationDelay: '0.5s' }} />
+              </div>
+            </div>
+          )}
+
+          {/* Agent Directory */}
+          {callState !== CALL_STATES.DIALING && (
+            <div className="flex-1 flex flex-col min-h-0 border-t border-white/[0.05]">
+              <div className="px-4 py-2.5 flex items-center justify-between">
+                <span className="text-[10px] font-mono text-slate-500 tracking-wider">TEAM DIRECTORY</span>
+                <span className="text-[10px] font-mono text-slate-700">{TEAM.filter(a => a.status === 'Available').length} online</span>
+              </div>
+              <div className="flex-1 overflow-y-auto px-2 pb-2">
+                <AgentDirectory agents={TEAM} callActive={isCallActive}
+                  onTransfer={a => handleBlindTransfer(a.name)} onConference={handleConference} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ═══ CENTER: Transcript + Copilot side-by-side, Notes drawer ═══ */}
+        <div className="flex-1 flex flex-col min-w-0 relative">
+          {/* Post-call summary overlay */}
+          <PostCallSummary
+            summary={{ ...POST_CALL_SUMMARY, duration: finalCallDuration }}
+            duration={finalCallDuration}
+            visible={showPostCallSummary}
+            onDismiss={() => setShowPostCallSummary(false)}
+          />
+
+          {/* Header bar */}
+          <div className="h-10 shrink-0 flex items-center border-b border-white/[0.05] px-4">
+            <div className="flex items-center gap-2">
+              <span className="text-cyan-400" dangerouslySetInnerHTML={{ __html: lucide.icons['radio']?.toSvg({ width: 13, height: 13, 'stroke-width': 1.8 }) }} />
+              <span className="text-[10px] font-mono text-cyan-400 tracking-wider">LIVE TRANSCRIPT</span>
+            </div>
+
+            {/* Divider label for copilot side */}
+            <div className="flex items-center gap-2 ml-auto">
+              {isCallActive && voiceSentiment && (() => {
+                const mood = voiceSentiment.frustration > 0.6 ? 'FRUSTRATED' :
+                             voiceSentiment.agitation > 0.5 ? 'AGITATED' :
+                             voiceSentiment.engagement > 0.7 ? 'ENGAGED' : 'CALM';
+                const moodColor = voiceSentiment.frustration > 0.6 ? 'rose' :
+                                  voiceSentiment.agitation > 0.5 ? 'amber' :
+                                  voiceSentiment.engagement > 0.7 ? 'emerald' : 'cyan';
+                return <Badge color={moodColor}>{mood}</Badge>;
+              })()}
+              {isCallActive && (
+                <div className="flex items-center gap-1.5 ml-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                  <span className="text-[9px] font-mono text-slate-500">REC</span>
+                </div>
+              )}
+              <span className="text-[10px] font-mono text-slate-700 ml-1">{transcriptEntries.length} entries</span>
+            </div>
+          </div>
+
+          {/* Split content: Transcript | Copilot */}
+          <div className={`flex-1 flex overflow-hidden ${showNotesDrawer ? '' : ''}`} style={{ minHeight: 0 }}>
+            {/* Transcript panel — left, wider */}
+            <div className="flex-[3] overflow-hidden p-4 border-r border-white/[0.05]">
+              <AITranscriptPanel entries={transcriptEntries} insights={aiInsights} />
+            </div>
+
+            {/* Copilot panel — right, narrower */}
+            <div className="flex-[2] overflow-hidden flex flex-col">
+              <div className="h-8 shrink-0 flex items-center gap-2 px-4 border-b border-white/[0.05]">
+                <span className="text-violet-400" dangerouslySetInnerHTML={{ __html: lucide.icons['sparkles']?.toSvg({ width: 12, height: 12, 'stroke-width': 2 }) }} />
+                <span className="text-[10px] font-mono text-violet-400 tracking-wider">AI COPILOT</span>
+                {copilotSuggestions.length > 0 && (
+                  <span className="ml-auto text-[9px] font-mono text-slate-600">{copilotSuggestions.length} suggestions</span>
+                )}
+              </div>
+              <div className="flex-1 overflow-hidden p-3">
+                <AICopilotPanel suggestions={copilotSuggestions} isActive={isCallActive || copilotSuggestions.length > 0} />
+              </div>
+            </div>
+          </div>
+
+          {/* Notes drawer — collapsible bottom strip */}
+          <div className={`shrink-0 border-t border-white/[0.05] transition-all duration-300 ${showNotesDrawer ? 'h-36' : 'h-8'}`}>
+            <button onClick={() => setShowNotesDrawer(!showNotesDrawer)}
+              className="w-full h-8 flex items-center gap-2 px-4 text-[10px] font-mono text-slate-500 hover:text-slate-400 transition-colors">
+              <span dangerouslySetInnerHTML={{ __html: lucide.icons['pen-line']?.toSvg({ width: 12, height: 12, 'stroke-width': 1.8 }) }} />
+              <span className="tracking-wider">CALL NOTES</span>
+              {notes && !showNotesDrawer && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 ml-1" />}
+              <span className={`ml-auto transition-transform duration-200 ${showNotesDrawer ? 'rotate-180' : ''}`}
+                dangerouslySetInnerHTML={{ __html: lucide.icons['chevron-up']?.toSvg({ width: 12, height: 12 }) }} />
+            </button>
+            {showNotesDrawer && (
+              <div className="h-[calc(100%-2rem)] animate-fade-in">
+                <NotesPanel notes={notes} onChange={setNotes} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ═══ RIGHT COLUMN: Mood + Queues + Info ═══ */}
+        <div className="w-64 shrink-0 border-l border-white/[0.05] flex flex-col bg-surface-overlay/50">
+          {/* Caller Mood Gauge */}
+          <CallerMoodGauge sentiment={voiceSentiment} isActive={isCallActive} />
+
+          {/* Queue Monitor */}
+          <div className="px-3 py-2.5 border-b border-white/[0.05]">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono text-slate-500 tracking-wider">QUEUE MONITOR</span>
+              <span className={`text-[10px] font-mono ${queues.reduce((s, q) => s + q.callers.length, 0) > 6 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {queues.reduce((s, q) => s + q.callers.length, 0)} total
+              </span>
+            </div>
+          </div>
+          <div className="px-3 py-3 border-b border-white/[0.05]">
+            <QueueMonitor queues={queues} onPickCall={handlePickCall} callActive={isCallActive} />
+          </div>
+
+          {/* Call info (when active) */}
+          {isCallActive && (
+            <div className="px-3 py-3 border-b border-white/[0.05] animate-fade-in">
+              <span className="text-[10px] font-mono text-slate-500 tracking-wider block mb-2">CALL INFO</span>
+              <div className="space-y-2">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-600 font-mono">Number</span>
+                  <span className="text-slate-300 font-mono">{phoneNumber}</span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-600 font-mono">Duration</span>
+                  <span className="text-cyan-400 font-mono">{formatTime(callDuration)}</span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-600 font-mono">State</span>
+                  <Badge color={cs.color}>{cs.label}</Badge>
+                </div>
+                {conferenceActive && (
+                  <div className="flex justify-between text-[11px]">
+                    <span className="text-slate-600 font-mono">Conference</span>
+                    <Badge color="violet">{conferenceParty}</Badge>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* AI Summary (when insights available) */}
+          {aiInsights.length > 0 && (
+            <div className="flex-1 px-3 py-3 overflow-y-auto">
+              <span className="text-[10px] font-mono text-violet-400 tracking-wider block mb-2">AI SUMMARY</span>
+              <div className="space-y-2">
+                {aiInsights.map((ins, i) => {
+                  const typeLabel = { summary: 'SUMMARY', action: 'ACTION', sentiment: 'SENTIMENT', compliance: 'COMPLIANCE' };
+                  const typeColor = { summary: 'cyan', action: 'emerald', sentiment: 'violet', compliance: 'amber' };
+                  return (
+                    <div key={i} className="p-2 rounded-md bg-surface-overlay border border-white/[0.04] animate-slide-up">
+                      <Badge color={typeColor[ins.type]} className="mb-1">{typeLabel[ins.type]}</Badge>
+                      <p className="text-[11px] text-slate-400 leading-relaxed mt-1">{ins.text}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Keyboard shortcuts */}
+          {!isCallActive && aiInsights.length === 0 && (
+            <div className="flex-1 px-3 py-3 flex flex-col justify-end">
+              <span className="text-[10px] font-mono text-slate-700 tracking-wider block mb-2">SHORTCUTS</span>
+              <div className="space-y-1 text-[10px] font-mono text-slate-700">
+                {[
+                  ['Enter', 'Dial number'],
+                  ['M', 'Mute / Unmute'],
+                  ['H', 'Hold / Resume'],
+                  ['T', 'Transfer panel'],
+                  ['E', 'End call'],
+                ].map(([key, desc]) => (
+                  <div key={key} className="flex items-center gap-2">
+                    <span className="w-8 text-center py-0.5 rounded bg-white/[0.03] border border-white/[0.05] text-slate-500">{key}</span>
+                    <span>{desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Mount ───
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<CallingConsole />);
+</script>
+</body>
+</html>

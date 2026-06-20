@@ -1,18 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
-  namespace: voiceagent
-spec:
-  podSelector: {}
-  policyTypes:
-    - Ingress
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: allow-postgres
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
@@ -33,7 +22,6 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-redis
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
@@ -51,7 +39,6 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-chromadb
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
@@ -72,7 +59,6 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-whisper
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
@@ -89,26 +75,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-piper
-  namespace: voiceagent
-spec:
-  podSelector:
-    matchLabels:
-      app: piper
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: media-gateway
-      ports:
-        - port: 5000
-          protocol: TCP
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: allow-gateway
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
@@ -117,48 +84,23 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app: freeswitch
-        - podSelector:
-            matchLabels:
               app: ui
         - podSelector:
             matchLabels:
               app: prometheus
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: istio-system
       ports:
         - port: 8080
           protocol: TCP
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-freeswitch
-  namespace: voiceagent
-spec:
-  podSelector:
-    matchLabels:
-      app: freeswitch
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: media-gateway
-      ports:
-        - port: 8022
-          protocol: TCP
     - ports:
-        - port: 5060
+        - port: 5062
           protocol: UDP
-        - port: 5060
+        - port: 5062
           protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-prometheus
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
@@ -168,9 +110,6 @@ spec:
         - podSelector:
             matchLabels:
               app: grafana
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: istio-system
       ports:
         - port: 9090
           protocol: TCP
@@ -179,17 +118,12 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-grafana
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
       app: grafana
   ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: istio-system
-      ports:
+    - ports:
         - port: 3000
           protocol: TCP
 ---
@@ -197,16 +131,11 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-ui
-  namespace: voiceagent
 spec:
   podSelector:
     matchLabels:
       app: ui
   ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: istio-system
-      ports:
+    - ports:
         - port: 3000
           protocol: TCP

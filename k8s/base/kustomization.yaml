@@ -5,17 +5,12 @@ namespace: voiceagent
 
 resources:
   - namespace.yaml
-  # Gateway
+  # Gateway (standalone SIP B2BUA)
   - gateway-deployment.yaml
   - gateway-service.yaml
-  # FreeSWITCH
-  - freeswitch-deployment.yaml
-  - freeswitch-service.yaml
-  # STT / TTS
+  # STT
   - whisper-deployment.yaml
   - whisper-service.yaml
-  - piper-deployment.yaml
-  - piper-service.yaml
   # Data stores
   - postgres-deployment.yaml
   - postgres-service.yaml
@@ -39,7 +34,7 @@ resources:
   - grafana-pvc.yaml
   - grafana-secret.yaml
   # Configuration
-  - sbc-configmap.yaml
+  - gcp-configmap.yaml
   - gateway-jwt-secret.yaml
-  # Network policies
-  - network-policies.yaml
+  # Network policies (disabled for local dev — enable for production)
+  # - network-policies.yaml

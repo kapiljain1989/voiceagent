@@ -23,8 +23,6 @@ spec:
             - containerPort: 3000
               protocol: TCP
           env:
-            - name: DATABASE_URL
-              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.voiceagent.svc.cluster.local:5432/voiceagent"
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
@@ -35,6 +33,8 @@ spec:
                 secretKeyRef:
                   name: postgres-credentials
                   key: password
+            - name: DATABASE_URL
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres.voiceagent.svc.cluster.local:5432/voiceagent"
             - name: GATEWAY_URL
               value: "http://media-gateway.voiceagent.svc.cluster.local:8080"
             - name: NEXT_PUBLIC_GATEWAY_URL

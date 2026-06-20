@@ -6,31 +6,14 @@ namespace: voiceagent
 resources:
   - ../../base
 
-patches:
-  # FreeSWITCH: hostNetwork for KinD (SIP/RTP require direct port binding)
-  - target:
-      kind: Deployment
-      name: freeswitch
-    patch: |
-      - op: replace
-        path: /spec/template/spec/hostNetwork
-        value: true
-      - op: replace
-        path: /spec/template/spec/dnsPolicy
-        value: ClusterFirstWithHostNet
+patchesStrategicMerge:
+  - gateway-hostnetwork.yaml
 
-  # All custom images: imagePullPolicy=Never (preloaded via kind load)
+patches:
+  # Custom images: imagePullPolicy=Never (preloaded via kind load)
   - target:
       kind: Deployment
       name: media-gateway
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/imagePullPolicy
-        value: Never
-
-  - target:
-      kind: Deployment
-      name: freeswitch
     patch: |
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy

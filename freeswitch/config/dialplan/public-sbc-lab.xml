@@ -1,21 +1,23 @@
 <include>
   <context name="public">
 
-    <!-- 2xxx: Co-Pilot bridge — ring agent1 + SIPREC fork caller leg -->
+    <!-- 2xxx: Co-Pilot queue — agent picks via Console WebRTC -->
     <extension name="copilot_bridge">
       <condition field="destination_number" expression="^(2[0-9]{3})$">
         <action application="answer"/>
-        <!-- Fork caller (A-leg) audio to gateway copilot -->
+        <!-- Fork caller audio to gateway for copilot + WebRTC bridge -->
         <action application="set" data="res=${uuid_audio_fork ${uuid} start ws://gateway:8080/siprec?role=caller&amp;call_id=${uuid} mono 16000}"/>
-        <!-- Bridge to agent — copilot observes caller side -->
-        <action application="bridge" data="sofia/softphone/agent1%$${ext_ip}"/>
+        <!-- conference keeps the media engine active (reads caller audio continuously) -->
+        <action application="conference" data="queue_${uuid}@default"/>
       </condition>
     </extension>
 
-    <!-- 21xx: Co-Pilot auto-answer — AI answers, SIPREC observes -->
+    <!-- 21xx: Co-Pilot auto-answer — hold music briefly, then SIPREC -->
     <extension name="copilot_auto">
       <condition field="destination_number" expression="^(21[0-9]{2})$">
         <action application="answer"/>
+        <!-- Brief welcome tone before AI pipeline starts -->
+        <action application="playback" data="tone_stream://%(200,0,400);%(200,100,400)"/>
         <action application="set" data="res=${uuid_audio_fork ${uuid} start ws://gateway:8080/siprec?role=caller&amp;call_id=${uuid} mono 16000}"/>
         <action application="park"/>
       </condition>

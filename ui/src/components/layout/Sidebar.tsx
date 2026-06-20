@@ -1,16 +1,19 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { getUser, getUserRole, getNavForRole, canAccessPage, getDefaultPage, logout } from "@/lib/auth";
 
 const nav = [
   { href: "/", label: "Command", icon: "grid", shortcut: "D" },
   { href: "/agents", label: "Agents", icon: "users", shortcut: "A" },
   { href: "/calls", label: "Calls", icon: "phone", shortcut: "C" },
-  { href: "/calls/live", label: "Live Ops", icon: "radio", shortcut: "L" },
+  { href: "/console", label: "Console", icon: "headset", shortcut: "O" },
+  { href: "/supervisor", label: "Supervisor", icon: "eye", shortcut: "V" },
   { href: "/documents", label: "Knowledge", icon: "file", shortcut: "K" },
   { href: "/security", label: "Security", icon: "shield", shortcut: "X" },
-  { href: "/infrastructure", label: "Infra", icon: "server", shortcut: "I" },
+  { href: "/infrastructure", label: "Diagnostics", icon: "server", shortcut: "I" },
   { href: "/settings", label: "Config", icon: "sliders", shortcut: "S" },
 ];
 
@@ -63,6 +66,18 @@ const icons: Record<string, React.ReactNode> = {
       <line x1="6" y1="18" x2="6.01" y2="18" />
     </svg>
   ),
+  eye: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
+  headset: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
+      <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+    </svg>
+  ),
   sliders: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
       <line x1="4" y1="21" x2="4" y2="14" />
@@ -80,59 +95,156 @@ const icons: Record<string, React.ReactNode> = {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const [expanded, setExpanded] = useState(true);
+  const role = getUserRole();
+  const allowedPaths = getNavForRole(role);
+
+  // Redirect if current page is not accessible
+  useEffect(() => {
+    if (pathname !== "/login" && !canAccessPage(pathname, role)) {
+      router.replace(getDefaultPage(role));
+    }
+  }, [pathname, role, router]);
+
+  useEffect(() => {
+    document.documentElement.dataset.sidebarCollapsed = expanded ? "false" : "true";
+  }, [expanded]);
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-16 lg:w-56 bg-[#070b14] border-r border-cyan-500/10 flex flex-col z-50">
-      {/* Logo */}
-      <div className="h-16 flex items-center px-4 lg:px-5 border-b border-cyan-500/10">
-        <div className="w-8 h-8 rounded bg-cyan-500/20 flex items-center justify-center">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2.5">
-            <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
-          </svg>
-        </div>
-        <span className="hidden lg:block ml-3 font-mono text-sm font-semibold text-cyan-400 tracking-wider">
-          VOICEAGENT
-        </span>
-      </div>
+    <>
+      {/* Mobile backdrop */}
+      {expanded && (
+        <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={() => setExpanded(false)} />
+      )}
 
-      {/* Nav links */}
-      <nav className="flex-1 py-4 space-y-1 px-2 lg:px-3">
-        {nav.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`
-                flex items-center gap-3 px-2.5 lg:px-3 py-2.5 rounded-md text-sm transition-all duration-150
-                ${active
-                  ? "bg-cyan-500/10 text-cyan-400 glow-border"
-                  : "text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]"
-                }
-              `}
-            >
-              <span className={active ? "text-cyan-400" : "text-slate-600"}>
-                {icons[item.icon]}
+      <aside
+        className={`fixed left-0 top-0 h-screen bg-[#070b14] border-r border-cyan-500/10 flex flex-col z-50 transition-all duration-200 ${
+          expanded ? "w-56" : "w-16"
+        }`}
+      >
+        {/* Logo + toggle */}
+        <div className="h-16 flex items-center justify-between px-4 border-b border-cyan-500/10">
+          <div className="flex items-center min-w-0">
+            <div className="w-8 h-8 shrink-0 rounded bg-cyan-500/20 flex items-center justify-center">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2.5">
+                <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
+              </svg>
+            </div>
+            {expanded && (
+              <span className="ml-3 font-mono text-sm font-semibold text-cyan-400 tracking-wider whitespace-nowrap">
+                VOICEAGENT
               </span>
-              <span className="hidden lg:block font-medium">{item.label}</span>
-              {active && (
-                <span className="hidden lg:block ml-auto w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+            )}
+          </div>
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="w-6 h-6 shrink-0 flex items-center justify-center rounded text-slate-600 hover:text-cyan-400 transition-colors"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              {expanded ? (
+                <>
+                  <polyline points="11 17 6 12 11 7" />
+                  <polyline points="18 17 13 12 18 7" />
+                </>
+              ) : (
+                <>
+                  <polyline points="13 7 18 12 13 17" />
+                  <polyline points="6 7 11 12 6 17" />
+                </>
               )}
-            </Link>
-          );
-        })}
-      </nav>
+            </svg>
+          </button>
+        </div>
 
-      {/* Status bar */}
-      <div className="px-3 py-3 border-t border-cyan-500/10">
-        <div className="hidden lg:flex items-center gap-2 text-xs font-mono text-slate-600">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>SYS ONLINE</span>
+        {/* Nav */}
+        <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">
+          {nav.filter((item) => allowedPaths.includes(item.href)).map((item) => {
+            const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                title={expanded ? undefined : item.label}
+                onClick={() => { if (window.innerWidth < 1024) setExpanded(false); }}
+                className={`
+                  flex items-center gap-3 px-2.5 py-2.5 rounded-md text-sm transition-all duration-150
+                  ${expanded ? "" : "justify-center"}
+                  ${active
+                    ? "bg-cyan-500/10 text-cyan-400 glow-border"
+                    : "text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]"
+                  }
+                `}
+              >
+                <span className={`shrink-0 ${active ? "text-cyan-400" : "text-slate-600"}`}>
+                  {icons[item.icon]}
+                </span>
+                {expanded && <span className="font-medium whitespace-nowrap">{item.label}</span>}
+                {expanded && active && (
+                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse-glow" />
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* User + Status */}
+        <div className="border-t border-cyan-500/10">
+          {/* System status */}
+          <div className={`px-3 py-2 flex items-center gap-2 text-xs font-mono text-slate-600 ${expanded ? "" : "justify-center"}`}>
+            <span className="w-2 h-2 shrink-0 rounded-full bg-emerald-500 animate-pulse" />
+            {expanded && <span>SYS ONLINE</span>}
+          </div>
+
+          {/* User info + logout */}
+          {(() => {
+            const user = getUser();
+            if (!user) return null;
+            return (
+              <div className={`px-3 py-3 border-t border-cyan-500/[0.06] ${expanded ? "" : "flex justify-center"}`}>
+                {expanded ? (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 shrink-0 rounded-full bg-cyan-500/15 flex items-center justify-center">
+                        <span className="text-[10px] font-mono font-semibold text-cyan-400">
+                          {user.username.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-mono text-slate-300 truncate">{user.username}</div>
+                        <div className="text-[10px] font-mono text-slate-600">{user.role}</div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={logout}
+                      title="Logout"
+                      className="shrink-0 w-7 h-7 flex items-center justify-center rounded text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                        <polyline points="16 17 21 12 16 7" />
+                        <line x1="21" y1="12" x2="9" y2="12" />
+                      </svg>
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={logout}
+                    title="Logout"
+                    className="w-8 h-8 flex items-center justify-center rounded text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
-        <div className="lg:hidden flex justify-center">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-        </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

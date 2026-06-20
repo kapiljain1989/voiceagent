@@ -143,3 +143,8 @@
 .transcript-line[data-speaker="agent"] {
   border-left-color: #10b981;
 }
+
+/* Sidebar collapse — icons-only mode */
+html[data-sidebar-collapsed="true"] .main-content {
+  margin-left: 4rem !important;
+}

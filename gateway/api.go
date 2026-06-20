@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -139,6 +140,10 @@ func (h *APIHandler) handleAgents(w http.ResponseWriter, r *http.Request) {
 		h.listAgents(w, r)
 	case "POST":
 		h.createAgent(w, r)
+	case "PUT":
+		h.updateAgent(w, r)
+	case "DELETE":
+		h.deleteAgent(w, r)
 	default:
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 	}
@@ -154,7 +159,12 @@ func (h *APIHandler) listAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.QueryContext(r.Context(),
-		"SELECT id, name, email, phone, expertise, status, max_calls, active_calls FROM agents ORDER BY name")
+		`SELECT id, name, COALESCE(email,''), COALESCE(phone,''), expertise, status,
+			max_calls, active_calls, COALESCE(extension,''), COALESCE(department,'Support'),
+			languages, COALESCE(priority,1), COALESCE(current_calls,0)
+		FROM agents ORDER BY
+			CASE status WHEN 'Available' THEN 0 WHEN 'Busy' THEN 1 WHEN 'On Break' THEN 2 WHEN 'Wrap-up' THEN 3 ELSE 4 END,
+			name`)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -163,15 +173,21 @@ func (h *APIHandler) listAgents(w http.ResponseWriter, r *http.Request) {
 
 	var agents []map[string]any
 	for rows.Next() {
-		var id, name, email, status string
-		var phone sql.NullString
-		var expertise []string
-		var maxCalls, activeCalls int
-		rows.Scan(&id, &name, &email, &phone, &expertise, &status, &maxCalls, &activeCalls)
+		var id, name, email, phone, status, extension, department string
+		var expertiseStr, languagesStr string
+		var maxCalls, activeCalls, priority, currentCalls int
+		if err := rows.Scan(&id, &name, &email, &phone, &expertiseStr, &status,
+			&maxCalls, &activeCalls, &extension, &department,
+			&languagesStr, &priority, &currentCalls); err != nil {
+			slog.Error("scan agent", "err", err)
+			continue
+		}
 		agents = append(agents, map[string]any{
-			"id": id, "name": name, "email": email, "phone": phone.String,
-			"expertise": expertise, "status": status,
-			"maxCalls": maxCalls, "activeCalls": activeCalls,
+			"id": id, "name": name, "email": email, "phone": phone,
+			"expertise": parsePostgresArray(expertiseStr), "status": status,
+			"max_calls": maxCalls, "active_calls": currentCalls,
+			"extension": extension, "department": department,
+			"languages": parsePostgresArray(languagesStr), "priority": priority,
 		})
 	}
 	if agents == nil {
@@ -197,15 +213,87 @@ func (h *APIHandler) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
+		return
+	}
+
 	var id string
 	err := h.db.QueryRowContext(r.Context(),
 		"INSERT INTO agents (name, email, phone, expertise) VALUES ($1, $2, $3, $4) RETURNING id",
 		req.Name, req.Email, req.Phone, req.Expertise).Scan(&id)
 	if err != nil {
+		if strings.Contains(err.Error(), "agents_email_unique") || strings.Contains(err.Error(), "duplicate key") {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "agent with this email already exists"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "created"})
+}
+
+func (h *APIHandler) updateAgent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID         string   `json:"id"`
+		Name       string   `json:"name"`
+		Email      string   `json:"email"`
+		Phone      string   `json:"phone"`
+		Extension  string   `json:"extension"`
+		Department string   `json:"department"`
+		Expertise  []string `json:"expertise"`
+		Languages  []string `json:"languages"`
+		Priority   int      `json:"priority"`
+		MaxCalls   int      `json:"max_calls"`
+		Status     string   `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if req.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	if h.db == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+		return
+	}
+
+	_, err := h.db.ExecContext(r.Context(), `
+		UPDATE agents SET
+			name=COALESCE(NULLIF($2,''),name),
+			email=COALESCE(NULLIF($3,''),email),
+			phone=COALESCE(NULLIF($4,''),phone),
+			extension=COALESCE(NULLIF($5,''),extension),
+			department=COALESCE(NULLIF($6,''),department),
+			expertise=CASE WHEN $7::text[] IS NOT NULL AND array_length($7::text[],1)>0 THEN $7 ELSE expertise END,
+			languages=CASE WHEN $8::text[] IS NOT NULL AND array_length($8::text[],1)>0 THEN $8 ELSE languages END,
+			priority=CASE WHEN $9>0 THEN $9 ELSE priority END,
+			max_calls=CASE WHEN $10>0 THEN $10 ELSE max_calls END,
+			status=COALESCE(NULLIF($11,''),status),
+			updated_at=NOW()
+		WHERE id=$1`,
+		req.ID, req.Name, req.Email, req.Phone, req.Extension, req.Department,
+		req.Expertise, req.Languages, req.Priority, req.MaxCalls, req.Status)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *APIHandler) deleteAgent(w http.ResponseWriter, r *http.Request) {
+	var req struct{ ID string `json:"id"` }
+	json.NewDecoder(r.Body).Decode(&req)
+	if req.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		return
+	}
+	if h.db != nil {
+		h.db.ExecContext(r.Context(), "DELETE FROM agents WHERE id=$1", req.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // -------------------------------------------------------------------

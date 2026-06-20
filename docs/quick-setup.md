@@ -213,6 +213,41 @@ make port-forward-grafana       # Grafana → localhost:3001
 make port-forward-prometheus    # Prometheus → localhost:9090
 ```
 
+## Option C: Standalone Helper (No FreeSWITCH)
+
+Plug-and-play SIPREC observer. Your SBC/PBX owns the call — VoiceAgent just observes and provides AI assist.
+
+```bash
+# Deploy (8 services — no FreeSWITCH, no Piper)
+docker compose -f docker-compose.helper.yml up -d
+
+# Or via Makefile
+make helper
+```
+
+Expected services:
+```
+voiceagent-gateway-1      Up    :8080 + :5060 (SIP)
+voiceagent-whisper-1      Up    :8000
+voiceagent-postgres-1     Up    :5432
+voiceagent-chromadb-1     Up    :8200
+voiceagent-ui-1           Up    :3000
+voiceagent-redis-1        Up    :6379
+voiceagent-prometheus-1   Up    :9090
+voiceagent-grafana-1      Up    :3001
+```
+
+### SBC Configuration (one line)
+
+| SBC | Config |
+|-----|--------|
+| **Cisco CUBE** | `media-recording <VOICEAGENT_IP> port 5060` |
+| **AudioCodes** | Recording Server = `<VOICEAGENT_IP>:5060` |
+| **Oracle SBC** | destination = `sip:<VOICEAGENT_IP>:5060` |
+| **Kamailio** | `siprec_start_recording("sip:<VOICEAGENT_IP>:5060")` |
+
+All features work automatically: live transcript, co-pilot suggestions, robocall detection, PII masking, voice sentiment, post-call summary.
+
 ---
 
 ## Configuration Checklist
@@ -231,6 +266,7 @@ make port-forward-prometheus    # Prometheus → localhost:9090
 |----------|---------|-------------|
 | `AUTH_ENABLED` | `true` | Enable JWT authentication |
 | `JWT_SECRET` | `voiceagent-production-secret` | JWT signing key (change in production) |
+| `VOICEAGENT_MODE` | `gateway` | `standalone` (SIPREC helper) or `gateway` (full B2BUA) |
 | `REDIS_URL` | `redis://redis:6379/0` | Redis URL for distributed sessions |
 | `CLAUDE_MODEL` | `claude-3-5-haiku@20241022` | LLM model |
 | `CRM_WEBHOOK_URL` | *(empty)* | POST call summaries here |
@@ -348,6 +384,16 @@ open http://localhost:9090
 open http://localhost:3001
 ```
 
+### Voice Sentiment & Config
+```bash
+# Check deployment mode
+curl http://localhost:8080/api/config | python3 -m json.tool
+
+# Active copilot sessions with live voice sentiment
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/copilot/active | python3 -m json.tool
+```
+
 ---
 
 ## SBC Configuration
@@ -461,3 +507,4 @@ make clean
 | K8s: Istio sidecar not injecting | Namespace label missing | Check `kubectl get ns voiceagent --show-labels` for `istio-injection=enabled` |
 | K8s: FreeSWITCH no SIP | hostNetwork not set | Local overlay uses hostNetwork; cloud uses LoadBalancer (`make freeswitch-ip`) |
 | K8s: Service unreachable | NetworkPolicy blocking | Check `kubectl -n voiceagent get networkpolicies` and verify source pod is allowed |
+| SIP: no SIPREC sessions | Wrong mode | Set `VOICEAGENT_MODE=standalone` in docker-compose |

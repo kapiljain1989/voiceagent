@@ -32,9 +32,9 @@ const (
 	playbackFrameMs = 20
 
 	// VAD parameters
-	vadRMSThreshold  = 50    // RMS energy above this = speech (tuned for laptop mics)
-	vadSilenceMs     = 400   // ms of silence triggers flush
-	vadMaxBufferSecs = 4     // cap at 4s to keep Whisper fast
+	vadRMSThreshold  = 85    // RMS energy above this = speech (G.711 noise floor ~65-80, quiet speech ~90+)
+	vadSilenceMs     = 600   // ms of silence triggers flush
+	vadMaxBufferSecs = 8     // cap at 8s to keep Whisper fast
 	vadFrameMs       = 20    // expected frame duration from FreeSWITCH
 	sampleRate       = 16000 // Hz
 	bytesPerSample   = 2     // 16-bit
@@ -60,11 +60,25 @@ type Config struct {
 	CRMWebhookToken string
 	DBURL           string
 	ChromaURL       string
+	SIPListenAddr   string
+	RecordingDir    string
+	Mode            string // "standalone" = SIPREC helper (no FS), "gateway" = full B2BUA with FreeSWITCH
+	DemoMode        bool
 }
 
+var database *Database
+
 func loadConfig() Config {
+	mode := envOr("VOICEAGENT_MODE", "gateway")
+	sipAddr := envOr("SIP_LISTEN_ADDR", "")
+	if mode == "standalone" && sipAddr == "" {
+		sipAddr = ":5060"
+	}
+
 	return Config{
+		Mode:         mode,
 		ListenAddr:   envOr("LISTEN_ADDR", ":8080"),
+		SIPListenAddr: sipAddr,
 		STTURL:       envOr("STT_URL", "http://whisper:8000/v1/audio/transcriptions"),
 		TTSURL:       envOr("TTS_URL", "http://piper:5000"),
 		GCPProjectID: envOr("GCP_PROJECT_ID", os.Getenv("ANTHROPIC_VERTEX_PROJECT_ID")),
@@ -82,6 +96,8 @@ func loadConfig() Config {
 		CRMWebhookToken: os.Getenv("CRM_WEBHOOK_TOKEN"),
 		DBURL:           os.Getenv("DATABASE_URL"),
 		ChromaURL:       envOr("CHROMA_URL", ""),
+		RecordingDir:    envOr("RECORDING_DIR", "/tmp/recordings"),
+		DemoMode:        os.Getenv("DEMO_MODE") == "true",
 	}
 }
 
@@ -127,6 +143,13 @@ type gateway struct {
 	ttsPool    *WorkerPool
 	rateLimiter *RateLimiter
 	admission  *AdmissionController
+	queueMgr    *QueueManager
+	didRouter   *DIDRouter
+	acd         *ACD
+	announcer   *QueueAnnouncer
+	webrtcMgr   *WebRTCManager
+	webhookMgr  *WebhookManager
+	sipServer   *SIPServer
 }
 
 // -------------------------------------------------------------------
@@ -150,6 +173,8 @@ type session struct {
 	histMu  sync.Mutex
 
 	playing atomic.Bool // true while TTS is being played back — STT discards frames
+
+	voiceSentiment *VoiceSentiment
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -193,6 +218,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize database with migrations
+	db, err := NewDatabase(cfg.DBURL)
+	if err != nil {
+		slog.Error("database connection failed", "err", err)
+	} else if db != nil {
+		if err := db.RunMigrations(); err != nil {
+			slog.Error("database migrations failed", "err", err)
+		}
+		database = db
+		slog.Info("database connected and migrated")
+	}
+
 	gw := &gateway{
 		cfg:         &cfg,
 		gcpCreds:    gcpCreds,
@@ -200,14 +237,17 @@ func main() {
 		metrics:     NewMetrics(),
 		sttPool:     NewWorkerPool("stt", parseWorkerURLs(cfg.STTURL)),
 		ttsPool:     NewWorkerPool("tts", parseWorkerURLs(cfg.TTSURL)),
-		rateLimiter: NewRateLimiter(100, 200), // 100 req/s per IP, burst 200
-		admission:   NewAdmissionController(500), // max 500 concurrent sessions
+		rateLimiter: NewRateLimiter(100, 200),
+		admission:   NewAdmissionController(500),
 	}
+
+	configStore := NewConfigStore(envOr("CONFIG_FILE", "/app/config/config.json"), &cfg)
 
 	mux := http.NewServeMux()
 	api := NewAPIHandler(gw)
 	gw.api = api
 	api.RegisterRoutes(mux)
+	configStore.RegisterRoutes(mux)
 
 	gw.robocall = NewRobocallDetector(api.db)
 	gw.robocall.RegisterRoutes(mux)
@@ -217,6 +257,27 @@ func main() {
 
 	gw.security = NewSecurityHandler(api.db)
 	gw.security.RegisterRoutes(mux)
+
+	secRules := NewSecurityRulesManager(gw.security.masker, gw.robocall, gw.security.biometrics)
+	secRules.RegisterRoutes(mux)
+
+	callRouter := NewCallRouter(api.db)
+	callRouter.RegisterRoutes(mux)
+
+	didRouter := NewDIDRouter(api.db)
+	didRouter.RegisterRoutes(mux)
+	gw.didRouter = didRouter
+
+	agentSessions := NewAgentSessionManager(api.db)
+	agentSessions.RegisterRoutes(mux)
+
+	// ACD — auto-assigns queued calls to best agent
+	acd := NewACD(api.db, gw, agentSessions)
+	acd.Start()
+	gw.acd = acd
+
+	// Queue announcer — TTS position/wait announcements to callers
+	gw.announcer = NewQueueAnnouncer(gw)
 
 	failover := NewFailoverManager(gw)
 	mux.HandleFunc("/api/failover/status", func(w http.ResponseWriter, r *http.Request) {
@@ -234,15 +295,53 @@ func main() {
 		})
 	})
 
+	gw.registerCallControlRoutes(mux)
+	gw.registerSupervisorRoutes(mux)
+	gw.registerWebhookRoutes(mux)
+	gw.webhookMgr = NewWebhookManager(gw)
+	gw.registerIVRRoutes(mux)
+	gw.registerTenantRoutes(mux)
+	queueMgr := NewQueueManager(gw)
+	gw.queueMgr = queueMgr
+	queueMgr.RegisterRoutes(mux)
+	agentMgr := NewAgentManager()
+	agentMgr.RegisterRoutes(mux)
+
 	mux.HandleFunc("/ws", gw.handleFS)
 	mux.HandleFunc("/call", gw.handleCall)
 	mux.HandleFunc("/siprec", gw.handleSIPREC)
 	mux.HandleFunc("/siprec/events", gw.handleEvents)
 	mux.HandleFunc("/siprec/summary", gw.handleSummaryQuery)
 	mux.HandleFunc("/api/copilot/active", gw.handleActiveCopilot)
+	mux.HandleFunc("/api/recordings", gw.handleRecordingsList)
+	mux.HandleFunc("/api/recordings/", gw.handleRecordingFile)
+	mux.HandleFunc("/api/reports/calls", gw.handleReportCalls)
+	mux.HandleFunc("/api/reports/agents", gw.handleReportAgents)
+	mux.HandleFunc("/api/reports/sentiment", gw.handleReportSentiment)
+
+	webrtcMgr := NewWebRTCManager(gw)
+	webrtcMgr.RegisterRoutes(mux)
+	gw.webrtcMgr = webrtcMgr
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"ok","sessions":%d}`, gw.sessions.Load())
+		fmt.Fprintf(w, `{"status":"ok","sessions":%d,"mode":"%s"}`, gw.sessions.Load(), cfg.Mode)
+	})
+	mux.HandleFunc("/api/services/status", func(w http.ResponseWriter, r *http.Request) {
+		services := checkServiceHealth(&cfg)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(services)
+	})
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"mode":         cfg.Mode,
+			"sip_listen":   cfg.SIPListenAddr,
+			"stt_url":      cfg.STTURL,
+			"tts_url":      cfg.TTSURL,
+			"claude_model": cfg.ClaudeModel,
+			"demo_mode":    cfg.DemoMode,
+			"database":     database != nil,
+		})
 	})
 
 	auth := NewAuthHandler(api.db, envOr("JWT_SECRET", ""))
@@ -267,12 +366,34 @@ func main() {
 	failover.StartHealthMonitor(sigCtx)
 
 	go func() {
-		slog.Info("gateway listening", "addr", cfg.ListenAddr, "stt", cfg.STTURL, "tts", cfg.TTSURL)
+		slog.Info("gateway listening", "addr", cfg.ListenAddr, "mode", cfg.Mode, "stt", cfg.STTURL)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("listen", "err", err)
 			os.Exit(1)
 		}
 	}()
+
+	// Start native SIP server for direct SIPREC
+	if cfg.SIPListenAddr != "" {
+		sipSrv, err := NewSIPServer(gw, cfg.SIPListenAddr)
+		if err != nil {
+			slog.Error("sip server init", "err", err)
+		} else {
+			if err := sipSrv.Start(); err != nil {
+				slog.Error("sip server start", "err", err)
+			}
+			sipSrv.RegisterOutboundRoutes(mux)
+			gw.sipServer = sipSrv
+		}
+	}
+
+	if cfg.Mode == "standalone" {
+		slog.Info("standalone helper mode — SBC points SIPREC to this IP",
+			"sip", cfg.SIPListenAddr, "http", cfg.ListenAddr)
+	} else {
+		slog.Info("gateway mode — FreeSWITCH forwards audio via WebSocket",
+			"esl", cfg.ESLHost+":"+cfg.ESLPort)
+	}
 
 	<-sigCtx.Done()
 	slog.Info("shutting down", "sessions", gw.sessions.Load())
@@ -330,16 +451,17 @@ func (gw *gateway) handleFS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &session{
-		id:          callID,
-		fsConn:      fsConn,
-		gw:          gw,
-		pcmIn:       make(chan []byte, pcmChanBufSize),
-		transcripts: make(chan string, 4),
-		sentences:   make(chan string, 8),
-		pcmOut:      make(chan []byte, 20),
-		events:      make(chan []byte, 10),
-		cancel:      cancel,
-		log:         log,
+		id:             callID,
+		fsConn:         fsConn,
+		gw:             gw,
+		pcmIn:          make(chan []byte, pcmChanBufSize),
+		transcripts:    make(chan string, 4),
+		sentences:      make(chan string, 8),
+		pcmOut:         make(chan []byte, 20),
+		events:         make(chan []byte, 10),
+		voiceSentiment: NewVoiceSentiment(),
+		cancel:         cancel,
+		log:            log,
 	}
 
 	// If the first frame was audio (no JSON metadata), inject it into the pipeline.
@@ -348,6 +470,22 @@ func (gw *gateway) handleFS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gw.sessions.Add(1)
+
+	// Auto-add call to queue for Console visibility
+	if gw.queueMgr != nil {
+		callerNum := fsUUID
+		if meta.CallID != "" {
+			callerNum = meta.CallID
+		}
+		gw.queueMgr.AddCaller("Support", queueEntry{
+			ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
+			CallID:   callID,
+			Number:   callerNum,
+			Reason:   "Incoming call",
+			Priority: "normal",
+		})
+		log.Info("call added to queue", "queue", "Support")
+	}
 
 	s.wg.Add(5)
 	go s.readFromFS(ctx)
@@ -360,6 +498,10 @@ func (gw *gateway) handleFS(w http.ResponseWriter, r *http.Request) {
 		s.wg.Wait()
 		gw.sessions.Add(-1)
 		fsConn.Close()
+		// Remove from queue on call end
+		if gw.queueMgr != nil {
+			gw.queueMgr.RemoveCallerByCallID(callID)
+		}
 		log.Info("session ended")
 	}()
 }
@@ -458,6 +600,9 @@ func (s *session) sttPipeline(ctx context.Context) {
 			if frameCount == warmupFrames+1 {
 				s.log.Info("warmup complete, VAD active", "rms", int(rms))
 			}
+
+			// Feed frames to voice sentiment analyzer
+			s.voiceSentiment.ProcessFrame(pcm)
 
 			// Discard frames during TTS playback to prevent feedback loop
 			if s.playing.Load() {
@@ -1166,6 +1311,29 @@ func isWhisperHallucination(text string) bool {
 		}
 	}
 
+	// Low vocabulary diversity: few unique words relative to total (hallucination signature)
+	if len(words) >= 10 {
+		unique := make(map[string]struct{})
+		for _, w := range words {
+			unique[w] = struct{}{}
+		}
+		if float64(len(unique))/float64(len(words)) < 0.25 {
+			return true
+		}
+	}
+
+	// Bigram repetition: any 2-word phrase appearing 4+ times
+	if len(words) >= 8 {
+		bigrams := make(map[string]int)
+		for i := 0; i < len(words)-1; i++ {
+			bg := words[i] + " " + words[i+1]
+			bigrams[bg]++
+			if bigrams[bg] >= 4 {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -1440,4 +1608,112 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+type ServiceStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Port   string `json:"port"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func checkServiceHealth(cfg *Config) []ServiceStatus {
+	var services []ServiceStatus
+
+	services = append(services, ServiceStatus{
+		Name: "Gateway", Status: "online", Port: cfg.ListenAddr, Detail: cfg.Mode + " mode",
+	})
+
+	// Whisper STT
+	if probeHTTP(cfg.STTURL) {
+		services = append(services, ServiceStatus{Name: "Whisper STT", Status: "online", Port: ":8000"})
+	} else {
+		services = append(services, ServiceStatus{Name: "Whisper STT", Status: "offline", Port: ":8000"})
+	}
+
+	// Piper TTS
+	if cfg.Mode == "gateway" {
+		if probeHTTP(cfg.TTSURL) {
+			services = append(services, ServiceStatus{Name: "Piper TTS", Status: "online", Port: ":5000"})
+		} else {
+			services = append(services, ServiceStatus{Name: "Piper TTS", Status: "offline", Port: ":5000"})
+		}
+	}
+
+	// PostgreSQL
+	if database != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := database.DB().PingContext(ctx); err == nil {
+			services = append(services, ServiceStatus{Name: "PostgreSQL", Status: "online", Port: ":5432"})
+		} else {
+			services = append(services, ServiceStatus{Name: "PostgreSQL", Status: "offline", Port: ":5432", Detail: err.Error()})
+		}
+	} else {
+		services = append(services, ServiceStatus{Name: "PostgreSQL", Status: "not configured", Port: ":5432"})
+	}
+
+	// Redis
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL != "" {
+		if probeTCP(redisURL) {
+			services = append(services, ServiceStatus{Name: "Redis", Status: "online", Port: ":6379"})
+		} else {
+			services = append(services, ServiceStatus{Name: "Redis", Status: "offline", Port: ":6379"})
+		}
+	}
+
+	// ChromaDB
+	if cfg.ChromaURL != "" {
+		if probeHTTP(cfg.ChromaURL + "/api/v2/heartbeat") {
+			services = append(services, ServiceStatus{Name: "ChromaDB", Status: "online", Port: ":8000"})
+		} else {
+			services = append(services, ServiceStatus{Name: "ChromaDB", Status: "offline", Port: ":8000"})
+		}
+	}
+
+	// FreeSWITCH ESL (gateway mode only)
+	if cfg.Mode == "gateway" {
+		if probeTCP(cfg.ESLHost + ":" + cfg.ESLPort) {
+			services = append(services, ServiceStatus{Name: "FreeSWITCH", Status: "online", Port: ":" + cfg.ESLPort})
+		} else {
+			services = append(services, ServiceStatus{Name: "FreeSWITCH", Status: "offline", Port: ":" + cfg.ESLPort})
+		}
+	}
+
+	// SIP server (standalone mode)
+	if cfg.SIPListenAddr != "" {
+		services = append(services, ServiceStatus{Name: "SIP Server", Status: "online", Port: cfg.SIPListenAddr})
+	}
+
+	return services
+}
+
+func probeHTTP(url string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
+}
+
+func probeTCP(addr string) bool {
+	if !strings.Contains(addr, ":") {
+		return false
+	}
+	// Strip protocol prefix
+	addr = strings.TrimPrefix(addr, "redis://")
+	addr = strings.TrimPrefix(addr, "tcp://")
+	// Remove path
+	if idx := strings.Index(addr, "/"); idx > 0 {
+		addr = addr[:idx]
+	}
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

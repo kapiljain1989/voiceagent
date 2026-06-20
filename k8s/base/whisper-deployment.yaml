@@ -17,8 +17,7 @@ spec:
     spec:
       containers:
         - name: whisper
-          image: voiceagent/whisper:latest
-          imagePullPolicy: Never
+          image: fedirz/faster-whisper-server:latest-cpu
           env:
             - name: WHISPER__MODEL
               value: "Systran/faster-whisper-base.en"

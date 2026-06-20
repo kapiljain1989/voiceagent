@@ -1,0 +1,125 @@
+# docker-compose.test.yml — Local Test Environment
+#
+# Everything on one Docker network — SIP/RTP works without Mac UDP issues.
+# KinD and prod manifests are NOT affected.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d          # Start all
+#   docker compose -f docker-compose.test.yml run test-call  # Run test call
+#   docker compose -f docker-compose.test.yml down -v         # Teardown
+#
+# Access:
+#   Console: http://localhost:3000
+#   Gateway: http://localhost:8080
+#
+# Test call:
+#   docker compose -f docker-compose.test.yml run test-call
+#   Then open Console → login as sarah → click PICK
+
+services:
+  # ─── Core: Gateway ─────────────────────────────────
+  gateway:
+    build: gateway/
+    ports:
+      - "8080:8080"
+    environment:
+      - LISTEN_ADDR=:8080
+      - VOICEAGENT_MODE=standalone
+      - SIP_LISTEN_ADDR=:5062
+      - EXTERNAL_IP=gateway
+      - STT_URL=http://whisper:8000/v1/audio/transcriptions
+      - TTS_URL=http://piper:5000
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID:-${ANTHROPIC_VERTEX_PROJECT_ID}}
+      - GCP_REGION=${GCP_REGION:-${CLOUD_ML_REGION:-us-east5}}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-3-5-haiku@20241022}
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp/adc.json
+      - DATABASE_URL=postgres://voiceagent:voiceagent@postgres:5432/voiceagent?sslmode=disable
+      - REDIS_URL=redis://redis:6379/0
+      - CHROMA_URL=http://chromadb:8000
+      - AUTH_ENABLED=true
+      - JWT_SECRET=voiceagent-test-secret
+    volumes:
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-~/.config/gcloud/application_default_credentials.json}:/secrets/gcp/adc.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ─── Data ───────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=voiceagent
+      - POSTGRES_USER=voiceagent
+      - POSTGRES_PASSWORD=voiceagent
+    volumes:
+      - test-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voiceagent"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+
+  # ─── AI ─────────────────────────────────────────────
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    ports:
+      - "8000:8000"
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-small.en
+
+  piper:
+    image: artibex/piper-http:latest
+    ports:
+      - "5050:5000"
+    environment:
+      - MODEL_URL=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx
+
+  chromadb:
+    image: chromadb/chroma:latest
+    volumes:
+      - test-chromadata:/chroma/chroma
+
+  # ─── UI ─────────────────────────────────────────────
+  ui:
+    build: ui/
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://voiceagent:voiceagent@postgres:5432/voiceagent
+      - GATEWAY_URL=http://gateway:8080
+      - NEXT_PUBLIC_GATEWAY_URL=http://localhost:8080
+      - CHROMA_URL=http://chromadb:8000
+    depends_on:
+      - gateway
+
+  # ─── Test SBC (Kamailio) ────────────────────────────
+  test-sbc:
+    build: test/sbc/
+    environment:
+      - GATEWAY_HOST=gateway
+    depends_on:
+      - gateway
+
+  # ─── Test Caller (on-demand) ────────────────────────
+  test-call:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./test:/app
+    command: python3 sip_test_call.py gateway:5062 60
+    profiles:
+      - test
+    depends_on:
+      - gateway
+
+volumes:
+  test-pgdata:
+  test-chromadata:

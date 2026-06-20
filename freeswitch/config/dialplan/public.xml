@@ -1,12 +1,15 @@
 <include>
   <context name="public">
 
-    <!-- Co-Pilot mode: 2xxx numbers — passive agent assist (SIPREC-style) -->
+    <!-- Co-Pilot mode: 2xxx numbers — MOH while queued, agent picks via Console -->
     <extension name="copilot">
       <condition field="destination_number" expression="^(2\d+)$">
         <action application="answer"/>
-        <!-- Fork caller audio to /siprec -->
+        <!-- Fork caller audio to gateway (bidirectional — agent voice comes back through WebSocket) -->
         <action application="set" data="res=${uuid_audio_fork ${uuid} start $${media_gateway_ws_base}/siprec?role=caller&amp;call_id=${uuid} mono 16000}"/>
+        <!-- Hold music until agent picks (gateway sends uuid_break to stop) -->
+        <action application="playback" data="local_stream://moh"/>
+        <!-- After MOH stops, park keeps channel alive for WebSocket audio -->
         <action application="park"/>
       </condition>
     </extension>

@@ -10,6 +10,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 	"sync"
 	"time"
 
@@ -53,6 +55,9 @@ type siprecSession struct {
 	startTime  time.Time
 	gw         *gateway
 
+	callerNumber string // caller phone number / SIP URI
+	agentNumber  string // agent extension / SIP URI
+
 	callerConn *websocket.Conn
 	agentConn  *websocket.Conn
 
@@ -67,6 +72,24 @@ type siprecSession struct {
 
 	sseClients map[chan []byte]struct{}
 	sseMu      sync.Mutex
+
+	voiceSentiment *VoiceSentiment
+
+	// Audio taps — additional listeners for caller audio (e.g., WebRTC bridge)
+	audioTaps   []chan []byte
+	audioTapsMu sync.Mutex
+
+	// Agent audio taps — listeners for agent audio (supervisor monitor)
+	agentTaps   []chan []byte
+	agentTapsMu sync.Mutex
+
+	whisperCh chan []byte // supervisor whisper → agent only
+
+	// RTP session — set when audio arrives via SIP/RTP (standalone mode)
+	rtpSession *siprecRTPSession
+
+	conference *ConferenceSession // non-nil during 3-way conference
+	recorder   *CallRecorder
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -91,16 +114,17 @@ func getOrCreateSIPRECSession(gw *gateway, callID string) *siprecSession {
 	_ = ctx
 
 	s := &siprecSession{
-		callID:      callID,
-		startTime:   time.Now(),
-		gw:          gw,
-		pcmCaller:   make(chan []byte, pcmChanBufSize),
-		pcmAgent:    make(chan []byte, pcmChanBufSize),
-		transcripts: make(chan *Utterance, 8),
-		suggestions: make(chan *Suggestion, 8),
-		sseClients:  make(map[chan []byte]struct{}),
-		cancel:      cancel,
-		log:         slog.With("call_id", callID, "mode", "copilot"),
+		callID:         callID,
+		startTime:      time.Now(),
+		gw:             gw,
+		pcmCaller:      make(chan []byte, pcmChanBufSize),
+		pcmAgent:       make(chan []byte, pcmChanBufSize),
+		transcripts:    make(chan *Utterance, 8),
+		suggestions:    make(chan *Suggestion, 8),
+		sseClients:     make(map[chan []byte]struct{}),
+		voiceSentiment: NewVoiceSentiment(),
+		cancel:         cancel,
+		log:            slog.With("call_id", callID, "mode", "copilot"),
 	}
 	siprecSessions[callID] = s
 
@@ -109,10 +133,22 @@ func getOrCreateSIPRECSession(gw *gateway, callID string) *siprecSession {
 	go s.agentSTT(ctx)
 	go s.coachWorker(ctx)
 
+	// Start call recording
+	rec := newCallRecorder(callID, s)
+	s.recorder = rec
+	rec.start(ctx, s)
+
 	go func() {
 		s.wg.Wait()
 		// Grace period — let any in-flight Whisper/Claude requests complete
 		time.Sleep(3 * time.Second)
+
+		// Save recording before call end processing
+		if s.recorder != nil {
+			s.recorder.stop(s)
+			s.recorder.save(s.gw, s)
+		}
+
 		s.onCallEnd()
 		// Keep session in map for 30s so SSE clients can receive the summary
 		time.Sleep(30 * time.Second)
@@ -123,7 +159,78 @@ func getOrCreateSIPRECSession(gw *gateway, callID string) *siprecSession {
 	}()
 
 	s.log.Info("copilot session starting")
+
+	// Fire webhook: call_started
+	if gw.webhookMgr != nil {
+		gw.webhookMgr.FireEvent("call_started", map[string]any{
+			"call_id": callID,
+			"caller":  s.callerNumber,
+		})
+	}
+
 	return s
+}
+
+func (s *siprecSession) AddAudioTap() chan []byte {
+	ch := make(chan []byte, pcmChanBufSize)
+	s.audioTapsMu.Lock()
+	s.audioTaps = append(s.audioTaps, ch)
+	s.audioTapsMu.Unlock()
+	return ch
+}
+
+func (s *siprecSession) RemoveAudioTap(ch chan []byte) {
+	s.audioTapsMu.Lock()
+	for i, t := range s.audioTaps {
+		if t == ch {
+			s.audioTaps = append(s.audioTaps[:i], s.audioTaps[i+1:]...)
+			break
+		}
+	}
+	s.audioTapsMu.Unlock()
+	close(ch)
+}
+
+func (s *siprecSession) broadcastToTaps(frame []byte) {
+	s.audioTapsMu.Lock()
+	for _, ch := range s.audioTaps {
+		select {
+		case ch <- frame:
+		default:
+		}
+	}
+	s.audioTapsMu.Unlock()
+}
+
+func (s *siprecSession) AddAgentTap() chan []byte {
+	ch := make(chan []byte, pcmChanBufSize)
+	s.agentTapsMu.Lock()
+	s.agentTaps = append(s.agentTaps, ch)
+	s.agentTapsMu.Unlock()
+	return ch
+}
+
+func (s *siprecSession) RemoveAgentTap(ch chan []byte) {
+	s.agentTapsMu.Lock()
+	for i, t := range s.agentTaps {
+		if t == ch {
+			s.agentTaps = append(s.agentTaps[:i], s.agentTaps[i+1:]...)
+			break
+		}
+	}
+	s.agentTapsMu.Unlock()
+	close(ch)
+}
+
+func (s *siprecSession) broadcastToAgentTaps(frame []byte) {
+	s.agentTapsMu.Lock()
+	for _, ch := range s.agentTaps {
+		select {
+		case ch <- frame:
+		default:
+		}
+	}
+	s.agentTapsMu.Unlock()
 }
 
 // -------------------------------------------------------------------
@@ -151,9 +258,33 @@ func (gw *gateway) handleSIPREC(w http.ResponseWriter, r *http.Request) {
 
 	s := getOrCreateSIPRECSession(gw, callID)
 
+	// Extract caller/agent identity from query params if provided
+	if caller := r.URL.Query().Get("caller"); caller != "" {
+		s.callerNumber = caller
+	}
+	if agent := r.URL.Query().Get("agent"); agent != "" {
+		s.agentNumber = agent
+	}
+
 	if role == "caller" {
 		s.callerConn = conn
 		s.log.Info("caller leg connected")
+
+		// Auto-add to queue for Console visibility
+		if gw.queueMgr != nil {
+			callerNum := s.callerNumber
+			if callerNum == "" {
+				callerNum = callID[:12]
+			}
+			gw.queueMgr.AddCaller("Support", queueEntry{
+				ID:       fmt.Sprintf("q-%d", time.Now().UnixNano()),
+				CallID:   callID,
+				Number:   callerNum,
+				Reason:   "Co-pilot session",
+				Priority: "normal",
+			})
+		}
+
 		s.readLeg(conn, s.pcmCaller, "caller")
 	} else {
 		s.agentConn = conn
@@ -170,15 +301,20 @@ func (s *siprecSession) readLeg(conn *websocket.Conn, ch chan []byte, role strin
 		}
 	}()
 
-	// Skip initial metadata frame if present
+	// Read initial frame (metadata or first audio)
 	mt, raw, err := conn.ReadMessage()
 	if err != nil {
+		s.log.Info("readLeg initial read error", "role", role, "err", err)
 		return
 	}
+	s.log.Info("readLeg initial frame", "role", role, "type", mt, "bytes", len(raw))
 	if mt == websocket.BinaryMessage && len(raw) > 0 {
 		select {
 		case ch <- raw:
 		default:
+		}
+		if role == "caller" {
+			s.broadcastToTaps(raw)
 		}
 	}
 
@@ -214,6 +350,9 @@ func (s *siprecSession) readLeg(conn *websocket.Conn, ch chan []byte, role strin
 			case ch <- buf:
 			default:
 			}
+			if role == "caller" {
+				s.broadcastToTaps(buf)
+			}
 		}
 	}
 }
@@ -233,18 +372,21 @@ func (s *siprecSession) agentSTT(ctx context.Context) {
 }
 
 func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker string) {
+	// Time-based chunking: collect audio in fixed windows, let Whisper handle VAD.
+	// This avoids RMS-based VAD problems with low-amplitude G.711 telephony audio.
+	const chunkMs = 3000
+	const chunkFrames = chunkMs / vadFrameMs // 150 frames = 3 seconds
+	warmupFrames := 500 / vadFrameMs         // skip first 0.5s
+
 	var audioBuf []byte
-	speechActive := false
-	silentFrames := 0
 	frameCount := 0
-	silenceLimit := vadSilenceMs / vadFrameMs
-	maxBytes := vadMaxBufferSecs * sampleRate * bytesPerSample
-	warmupFrames := 500 / vadFrameMs
+	sttFrames := 0
 
 	for {
 		select {
 		case <-ctx.Done():
-			if len(audioBuf) > 0 && speechActive {
+			s.log.Info("STT context done", "speaker", speaker, "frames", sttFrames)
+			if len(audioBuf) > 0 {
 				flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				s.transcribeAndEmit(flushCtx, audioBuf, speaker)
 				flushCancel()
@@ -252,7 +394,8 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 			return
 		case pcm, ok := <-pcmCh:
 			if !ok {
-				if len(audioBuf) > 0 && speechActive {
+				s.log.Info("STT channel closed", "speaker", speaker, "frames", sttFrames)
+				if len(audioBuf) > 0 {
 					flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 					s.transcribeAndEmit(flushCtx, audioBuf, speaker)
 					flushCancel()
@@ -260,44 +403,69 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 				return
 			}
 
+			sttFrames++
 			frameCount++
 			if frameCount <= warmupFrames {
 				continue
 			}
 
-			rms := rmsEnergy(pcm)
-
-			if rms > vadRMSThreshold {
-				audioBuf = append(audioBuf, pcm...)
-				speechActive = true
-				silentFrames = 0
-			} else if speechActive {
-				audioBuf = append(audioBuf, pcm...)
-				silentFrames++
-				if silentFrames >= silenceLimit {
-					s.transcribeAndEmit(ctx, audioBuf, speaker)
-					audioBuf = audioBuf[:0]
-					speechActive = false
-					silentFrames = 0
+			// Feed every frame to voice sentiment analyzer + broadcast periodically
+			if speaker == "customer" {
+				s.voiceSentiment.ProcessFrame(pcm)
+				if frameCount%250 == 0 {
+					vs := s.voiceSentiment.Analyze()
+					s.broadcastSSE(map[string]any{
+						"type":              "voice_sentiment",
+						"agitation":         vs.Agitation,
+						"frustration":       vs.Frustration,
+						"engagement":        vs.Engagement,
+						"avg_pitch_hz":      vs.AvgPitch,
+						"speaking_rate_wpm": vs.SpeakingRate,
+						"avg_energy":        vs.AvgEnergy,
+						"energy_trend":      vs.EnergyTrend,
+						"pitch_variance":    vs.PitchVariance,
+						"silence_ratio":     vs.SilenceRatio,
+						"sentiment":         vs.Sentiment,
+						"confidence":        vs.Confidence,
+					})
 				}
 			}
 
-			if len(audioBuf) > maxBytes {
-				if speechActive {
-					s.transcribeAndEmit(ctx, audioBuf, speaker)
-				}
+			audioBuf = append(audioBuf, pcm...)
+
+			// Flush every chunkFrames (3 seconds)
+			if (frameCount-warmupFrames)%chunkFrames == 0 && len(audioBuf) > 0 {
+				buf := make([]byte, len(audioBuf))
+				copy(buf, audioBuf)
 				audioBuf = audioBuf[:0]
-				speechActive = false
-				silentFrames = 0
+				go s.transcribeAndEmit(ctx, buf, speaker)
 			}
 		}
 	}
 }
 
 func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speaker string) {
-	if len(pcm) == 0 {
+	minBytes := sampleRate * bytesPerSample * 3 / 10 // 0.3s minimum
+	if len(pcm) < minBytes {
 		return
 	}
+
+	// Amplify quiet telephony audio (G.711 decodes to low amplitude)
+	amplified := make([]byte, len(pcm))
+	copy(amplified, pcm)
+	const gain = 8
+	for i := 0; i < len(amplified)-1; i += 2 {
+		s16 := int16(amplified[i]) | int16(amplified[i+1])<<8
+		v := int32(s16) * gain
+		if v > 32767 {
+			v = 32767
+		} else if v < -32768 {
+			v = -32768
+		}
+		amplified[i] = byte(v)
+		amplified[i+1] = byte(v >> 8)
+	}
+	pcm = amplified
 
 	wav := buildWAV(pcm, sampleRate, 1, 16)
 	text, err := s.whisperTranscribe(ctx, wav)
@@ -307,12 +475,18 @@ func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speak
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
+		s.log.Info("whisper returned empty", "speaker", speaker, "pcm_bytes", len(pcm))
 		return
 	}
 
 	if isWhisperHallucination(text) {
-		s.log.Debug("filtered hallucination", "text", text, "speaker", speaker)
+		s.log.Info("filtered hallucination", "speaker", speaker, "text_len", len(text), "preview", text[:min(len(text), 80)])
 		return
+	}
+
+	// Track word count for speaking rate analysis
+	if speaker == "customer" {
+		s.voiceSentiment.AddUtterance(len(strings.Fields(text)))
 	}
 
 	utt := &Utterance{
@@ -344,7 +518,7 @@ func (s *siprecSession) whisperTranscribe(ctx context.Context, wav []byte) (stri
 	w := multipart.NewWriter(&body)
 	part, _ := w.CreateFormFile("file", "audio.wav")
 	part.Write(wav)
-	w.WriteField("model", "Systran/faster-whisper-base.en")
+	w.WriteField("model", "Systran/faster-whisper-small.en")
 	w.WriteField("response_format", "json")
 	w.Close()
 
@@ -536,12 +710,26 @@ func (s *siprecSession) onCallEnd() {
 	copy(suggs, s.allSuggs)
 	s.convMu.Unlock()
 
+	duration := int(time.Since(s.startTime).Seconds())
+
 	if len(conv) == 0 {
-		s.log.Info("no conversation to summarize")
+		s.log.Info("no conversation to summarize — saving minimal record")
+		// Still persist call record for reporting
+		if database != nil {
+			endTime := time.Now()
+			rec := &CallRecord{
+				ID: callIDToUUID(s.callID), CallerNumber: s.callerNumber, CalledNumber: s.agentNumber,
+				Mode: "copilot", Status: "completed", StartTime: s.startTime,
+				EndTime: &endTime, Duration: duration, Sentiment: "neutral",
+				LLMModel: s.gw.cfg.ClaudeModel,
+			}
+			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			database.SaveCall(saveCtx, rec)
+			saveCancel()
+			s.log.Info("minimal call record saved")
+		}
 		return
 	}
-
-	duration := int(time.Since(s.startTime).Seconds())
 
 	// Build transcript text for Claude
 	var transcript strings.Builder
@@ -579,6 +767,15 @@ func (s *siprecSession) onCallEnd() {
 		}
 	}
 
+	// Voice sentiment analysis (acoustic features from raw audio)
+	voiceSentimentResult := s.voiceSentiment.Analyze()
+
+	// Combine text sentiment (from Claude) with voice sentiment (from audio)
+	finalSentiment := parsed.Sentiment
+	if voiceSentimentResult.Frustration > 0.6 && parsed.Sentiment != "negative" {
+		finalSentiment = "negative"
+	}
+
 	summary := CallSummary{
 		ConversationID: s.callID,
 		Duration:       duration,
@@ -586,7 +783,7 @@ func (s *siprecSession) onCallEnd() {
 		Summary:        parsed.Summary,
 		ActionItems:    parsed.ActionItems,
 		Commitments:    parsed.Commitments,
-		Sentiment:      parsed.Sentiment,
+		Sentiment:      finalSentiment,
 		Suggestions:    suggs,
 	}
 
@@ -594,22 +791,82 @@ func (s *siprecSession) onCallEnd() {
 		"duration", duration,
 		"utterances", len(conv),
 		"suggestions", len(suggs),
-		"sentiment", parsed.Sentiment,
+		"text_sentiment", parsed.Sentiment,
+		"voice_sentiment", voiceSentimentResult.Sentiment,
+		"agitation", fmt.Sprintf("%.2f", voiceSentimentResult.Agitation),
+		"frustration", fmt.Sprintf("%.2f", voiceSentimentResult.Frustration),
+		"avg_pitch", fmt.Sprintf("%.0f", voiceSentimentResult.AvgPitch),
+		"speaking_rate", fmt.Sprintf("%.0f", voiceSentimentResult.SpeakingRate),
+		"final_sentiment", finalSentiment,
 		"summary", parsed.Summary,
 	)
 
 	s.broadcastSSE(map[string]any{
-		"type":         "summary",
-		"summary":      parsed.Summary,
-		"action_items": parsed.ActionItems,
-		"commitments":  parsed.Commitments,
-		"sentiment":    parsed.Sentiment,
-		"duration":     duration,
+		"type":            "summary",
+		"summary":         parsed.Summary,
+		"action_items":    parsed.ActionItems,
+		"commitments":     parsed.Commitments,
+		"sentiment":       finalSentiment,
+		"duration":        duration,
+		"voice_sentiment": voiceSentimentResult,
 	})
 
 	if s.gw.cfg.CRMWebhookURL != "" {
 		s.postWebhook(summary)
 	}
+
+	// Persist call to database for reporting
+	if database != nil {
+		transcriptJSON, _ := json.Marshal(conv)
+		suggsJSON, _ := json.Marshal(suggs)
+		vsJSON, _ := json.Marshal(voiceSentimentResult)
+		endTime := time.Now()
+
+		rec := &CallRecord{
+			ID:           callIDToUUID(s.callID),
+			CallerNumber: s.callerNumber,
+			CalledNumber: s.agentNumber,
+			Mode:         "copilot",
+			Status:       "completed",
+			StartTime:    s.startTime,
+			EndTime:      &endTime,
+			Duration:     duration,
+			Summary:      parsed.Summary,
+			Sentiment:    finalSentiment,
+			ActionItems:  parsed.ActionItems,
+			Commitments:  parsed.Commitments,
+			Transcript:   transcriptJSON,
+			Suggestions:  suggsJSON,
+			VoiceSentiment: vsJSON,
+			LLMModel:     s.gw.cfg.ClaudeModel,
+		}
+
+		saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := database.SaveCall(saveCtx, rec); err != nil {
+			s.log.Error("save call record", "err", err)
+		} else {
+			s.log.Info("call record saved")
+		}
+		saveCancel()
+	}
+
+	// Fire webhook: call_ended
+	if s.gw.webhookMgr != nil {
+		s.gw.webhookMgr.FireEvent("call_ended", map[string]any{
+			"call_id":   s.callID,
+			"caller":    s.callerNumber,
+			"agent":     s.agentNumber,
+			"duration":  duration,
+			"sentiment": finalSentiment,
+			"summary":   parsed.Summary,
+		})
+	}
+}
+
+var callIDNamespace = uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8") // DNS namespace
+
+func callIDToUUID(callID string) string {
+	return uuid.NewSHA1(callIDNamespace, []byte(callID)).String()
 }
 
 func (s *siprecSession) generateSummary(ctx context.Context, transcript string) (string, error) {
@@ -696,13 +953,17 @@ func (s *siprecSession) broadcastSSE(event map[string]any) {
 	data, _ := json.Marshal(event)
 
 	s.sseMu.Lock()
-	defer s.sseMu.Unlock()
-
+	clientCount := len(s.sseClients)
 	for ch := range s.sseClients {
 		select {
 		case ch <- data:
 		default:
 		}
+	}
+	s.sseMu.Unlock()
+
+	if t, ok := event["type"]; ok && (t == "voice_sentiment" || t == "transcript") {
+		s.log.Info("SSE broadcast", "type", t, "clients", clientCount)
 	}
 }
 
@@ -748,7 +1009,11 @@ func (gw *gateway) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	ch := make(chan []byte, 20)
 	s.addSSEClient(ch)
-	defer s.removeSSEClient(ch)
+	slog.Info("SSE client connected", "call_id", callID)
+	defer func() {
+		s.removeSSEClient(ch)
+		slog.Info("SSE client disconnected", "call_id", callID)
+	}()
 
 	ctx := r.Context()
 	for {
@@ -770,11 +1035,18 @@ func (gw *gateway) handleActiveCopilot(w http.ResponseWriter, r *http.Request) {
 	siprecSessionsMu.Lock()
 	sessions := make([]map[string]any, 0, len(siprecSessions))
 	for id, s := range siprecSessions {
-		sessions = append(sessions, map[string]any{
+		entry := map[string]any{
 			"call_id":    id,
 			"started_at": s.startTime,
 			"duration":   int(time.Since(s.startTime).Seconds()),
-		})
+			"caller":     s.callerNumber,
+			"agent":      s.agentNumber,
+		}
+		if s.voiceSentiment != nil {
+			vs := s.voiceSentiment.Analyze()
+			entry["voice_sentiment"] = vs
+		}
+		sessions = append(sessions, entry)
 	}
 	siprecSessionsMu.Unlock()
 

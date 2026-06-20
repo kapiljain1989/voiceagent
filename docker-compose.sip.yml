@@ -37,6 +37,7 @@ services:
     volumes:
       - ${GOOGLE_APPLICATION_CREDENTIALS:-~/.config/gcloud/application_default_credentials.json}:/secrets/gcp/adc.json:ro
       - tts-audio:/tmp/tts
+      - gateway-config:/app/config
     depends_on:
       - postgres
       - chromadb
@@ -127,3 +128,4 @@ volumes:
   tts-audio:
   pgdata:
   chromadata:
+  gateway-config:

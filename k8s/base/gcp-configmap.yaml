@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gcp-config
+data:
+  project-id: "itpc-gcp-hcm-pe-eng-claude"
+  region: "us-east5"
