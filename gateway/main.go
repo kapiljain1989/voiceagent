@@ -61,6 +61,7 @@ type Config struct {
 	DBURL           string
 	ChromaURL       string
 	SIPListenAddr   string
+	RecordingDir    string
 	Mode            string // "standalone" = SIPREC helper (no FS), "gateway" = full B2BUA with FreeSWITCH
 	DemoMode        bool
 }
@@ -95,6 +96,7 @@ func loadConfig() Config {
 		CRMWebhookToken: os.Getenv("CRM_WEBHOOK_TOKEN"),
 		DBURL:           os.Getenv("DATABASE_URL"),
 		ChromaURL:       envOr("CHROMA_URL", ""),
+		RecordingDir:    envOr("RECORDING_DIR", "/tmp/recordings"),
 		DemoMode:        os.Getenv("DEMO_MODE") == "true",
 	}
 }
@@ -306,6 +308,8 @@ func main() {
 	mux.HandleFunc("/siprec/events", gw.handleEvents)
 	mux.HandleFunc("/siprec/summary", gw.handleSummaryQuery)
 	mux.HandleFunc("/api/copilot/active", gw.handleActiveCopilot)
+	mux.HandleFunc("/api/recordings", gw.handleRecordingsList)
+	mux.HandleFunc("/api/recordings/", gw.handleRecordingFile)
 
 	webrtcMgr := NewWebRTCManager(gw)
 	webrtcMgr.RegisterRoutes(mux)

@@ -87,6 +87,7 @@ type siprecSession struct {
 	rtpSession *siprecRTPSession
 
 	conference *ConferenceSession // non-nil during 3-way conference
+	recorder   *CallRecorder
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -130,10 +131,22 @@ func getOrCreateSIPRECSession(gw *gateway, callID string) *siprecSession {
 	go s.agentSTT(ctx)
 	go s.coachWorker(ctx)
 
+	// Start call recording
+	rec := newCallRecorder(callID, s)
+	s.recorder = rec
+	rec.start(ctx, s)
+
 	go func() {
 		s.wg.Wait()
 		// Grace period — let any in-flight Whisper/Claude requests complete
 		time.Sleep(3 * time.Second)
+
+		// Save recording before call end processing
+		if s.recorder != nil {
+			s.recorder.stop(s)
+			s.recorder.save(s.gw, s)
+		}
+
 		s.onCallEnd()
 		// Keep session in map for 30s so SSE clients can receive the summary
 		time.Sleep(30 * time.Second)
