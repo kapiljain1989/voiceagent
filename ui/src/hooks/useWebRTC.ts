@@ -148,7 +148,7 @@ export function useWebRTC(): UseWebRTCReturn {
       pc.oniceconnectionstatechange = () => {
         if (pc.iceConnectionState === "connected") {
           setCallState("connected");
-        } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+        } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "closed") {
           setCallState("disconnected");
           cleanup();
         }
@@ -224,7 +224,14 @@ export function useWebRTC(): UseWebRTCReturn {
       pc.oniceconnectionstatechange = () => {
         if (pc.iceConnectionState === "connected") {
           setCallState("connected");
-        } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+        } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "closed") {
+          setCallState("disconnected");
+          cleanup();
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
           setCallState("disconnected");
           cleanup();
         }
