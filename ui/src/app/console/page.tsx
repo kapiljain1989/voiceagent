@@ -467,7 +467,17 @@ export default function ConsolePage() {
         const data = await res.json();
         if (data.call_id) {
           setSiprecCallId(data.call_id);
+          setCallDuration(0);
           showNotif(`Dialing ${phoneNumber}...`, "cyan");
+          // Auto-bridge after short delay (call needs time to connect)
+          setTimeout(async () => {
+            try {
+              await authFetch("/api/queue/pick", { method: "POST", body: JSON.stringify({ call_id: data.call_id, agent_id: agentProfile?.id, webrtc_bridge: true }) });
+              await webrtc.bridge(data.call_id, agentProfile?.id);
+            } catch {
+              // Bridge might fail if call not answered yet — that's OK
+            }
+          }, 3000);
         } else {
           showNotif(data.error || "Dial failed", "rose");
           setCallState("idle");

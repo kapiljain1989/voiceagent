@@ -43,15 +43,20 @@ func (s *SIPServer) handleOutboundCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if number matches a registered user (direct call)
+	s.regMu.RLock()
+	registeredAddr, isRegistered := s.registrations[req.Number]
+	s.regMu.RUnlock()
+
 	// Find outbound trunk
 	trunk := s.findOutboundTrunk(req.TrunkID)
-	if trunk == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no outbound trunk configured"})
+	if trunk == nil && !isRegistered {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no outbound trunk configured and number not registered"})
 		return
 	}
 
 	callerID := req.CallerID
-	if callerID == "" {
+	if callerID == "" && trunk != nil {
 		callerID = trunk.CallerID
 	}
 	if callerID == "" {
@@ -59,7 +64,21 @@ func (s *SIPServer) handleOutboundCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	callID := fmt.Sprintf("outbound-%d", time.Now().UnixMilli())
-	log := slog.With("call_id", callID, "number", req.Number, "trunk", trunk.Name)
+
+	if isRegistered {
+		// Direct call to registered user — override trunk address
+		slog.Info("outbound call to registered user", "call_id", callID, "number", req.Number, "contact", registeredAddr)
+		if trunk == nil {
+			trunk = &SIPTrunk{Name: "direct", Address: "", Port: 5060, Codecs: "PCMU,PCMA"}
+		}
+		parts := strings.SplitN(registeredAddr, ":", 2)
+		trunk.Address = parts[0]
+		if len(parts) > 1 {
+			fmt.Sscanf(parts[1], "%d", &trunk.Port)
+		}
+	}
+
+	log := slog.With("call_id", callID, "number", req.Number, "trunk", trunk.Name, "dest", fmt.Sprintf("%s:%d", trunk.Address, trunk.Port))
 	log.Info("outbound call initiated")
 
 	// Start the outbound call in background
@@ -306,6 +325,7 @@ func (s *SIPServer) makeOutboundCall(callID, number, callerID string, trunk *SIP
 		sipTo:      toURI,
 		sipCallID:  callID,
 		sipSource:  trunkAddr,
+		sipConn:    conn,
 	}
 	copilot.rtpSession = sess
 
@@ -332,7 +352,18 @@ func (s *SIPServer) makeOutboundCall(callID, number, callerID string, trunk *SIP
 		s.gw.acd.agentMgr.RingAgent(agentID, callID, number, "Outbound", 0)
 	}
 
-	log.Info("outbound call active, waiting for agent to bridge")
+	log.Info("outbound call active")
+
+	// Notify agent via SSE that call is answered — Console will auto-bridge
+	if agentID != "" && s.gw.acd != nil && s.gw.acd.agentMgr != nil {
+		s.gw.acd.agentMgr.RingAgent(agentID, callID, number, "Outbound-Answered", 0)
+	}
+	// Also broadcast via copilot SSE
+	copilot.broadcastSSE(map[string]any{
+		"type":    "call_answered",
+		"call_id": callID,
+		"number":  number,
+	})
 
 	// Keep connection alive for BYE
 	go func() {

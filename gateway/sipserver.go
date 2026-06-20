@@ -26,6 +26,9 @@ type SIPServer struct {
 	sessions map[string]*siprecRTPSession
 	sessMu   sync.Mutex
 	security *SIPSecurity
+	// Registration store: username → contact address (host:port)
+	registrations map[string]string
+	regMu         sync.RWMutex
 }
 
 type siprecRTPSession struct {
@@ -44,6 +47,7 @@ type siprecRTPSession struct {
 	sipTo       string
 	sipCallID   string
 	sipSource   string // where to send BYE
+	sipConn     *net.UDPConn // outbound call's UDP connection (reuse for BYE)
 }
 
 func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
@@ -70,8 +74,9 @@ func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
 		addr:     listenAddr,
 		rtpBase:  30000,
 		rtpNext:  30000,
-		sessions: make(map[string]*siprecRTPSession),
-		security: sipSec,
+		sessions:      make(map[string]*siprecRTPSession),
+		security:      sipSec,
+		registrations: make(map[string]string),
 	}
 
 	server.OnInvite(s.handleInvite)
@@ -79,7 +84,23 @@ func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
 	server.OnBye(s.handleBye)
 	server.OnOptions(s.handleOptions)
 	server.OnRegister(func(req *sip.Request, tx sip.ServerTransaction) {
-		slog.Info("SIP REGISTER", "from", req.From().Address.User, "contact", req.Contact())
+		user := req.From().Address.User
+		contact := req.Contact()
+		slog.Info("SIP REGISTER", "from", user, "contact", contact)
+
+		// Store registration: extract contact host:port
+		if contact != nil {
+			contactAddr := fmt.Sprintf("%s:%d", contact.Address.Host, contact.Address.Port)
+			if contact.Address.Port == 0 {
+				contactAddr = contact.Address.Host + ":5060"
+			}
+
+			s.regMu.Lock()
+			s.registrations[user] = contactAddr
+			s.regMu.Unlock()
+			slog.Info("SIP registration stored", "user", user, "contact", contactAddr)
+		}
+
 		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
 		res.AppendHeader(sip.NewHeader("Expires", "3600"))
 		tx.Respond(res)
@@ -489,22 +510,25 @@ func (s *SIPServer) SendBYE(callID string) {
 		sess.sipCallID,
 	)
 
-	// Send BYE via UDP to the caller's source address
-	addr, err := net.ResolveUDPAddr("udp4", sess.sipSource)
-	if err != nil {
-		slog.Debug("SendBYE: resolve addr", "err", err, "source", sess.sipSource)
-		return
+	// Send BYE — use existing connection for outbound calls, new connection for inbound
+	if sess.sipConn != nil {
+		sess.sipConn.Write([]byte(bye))
+		slog.Info("SIP BYE sent via outbound connection", "call_id", callID, "target", sess.sipSource)
+	} else {
+		addr, err := net.ResolveUDPAddr("udp4", sess.sipSource)
+		if err != nil {
+			slog.Debug("SendBYE: resolve addr", "err", err, "source", sess.sipSource)
+			return
+		}
+		conn, err := net.DialUDP("udp4", nil, addr)
+		if err != nil {
+			slog.Debug("SendBYE: dial", "err", err)
+			return
+		}
+		defer conn.Close()
+		conn.Write([]byte(bye))
+		slog.Info("SIP BYE sent to caller", "call_id", callID, "target", sess.sipSource)
 	}
-
-	conn, err := net.DialUDP("udp4", nil, addr)
-	if err != nil {
-		slog.Debug("SendBYE: dial", "err", err)
-		return
-	}
-	defer conn.Close()
-
-	conn.Write([]byte(bye))
-	slog.Info("SIP BYE sent to caller", "call_id", callID, "target", sess.sipSource)
 }
 
 func (s *SIPServer) ActiveSessions() int {
