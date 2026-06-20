@@ -421,6 +421,9 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 	callID := req.CallID().Value()
 	slog.Info("SIP BYE received", "call_id", callID)
 
+	// Broadcast call_ended via SSE BEFORE closing (so Console receives it)
+	s.gw.broadcastCallState(callID, "ended")
+
 	s.sessMu.Lock()
 	for key, sess := range s.sessions {
 		if strings.HasPrefix(key, callID) {
@@ -435,9 +438,6 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 		}
 	}
 	s.sessMu.Unlock()
-
-	// Broadcast call_ended via SSE so Console updates
-	s.gw.broadcastCallState(callID, "ended")
 
 	// Close WebRTC bridge (so Console shows disconnected)
 	bridgeCallID := "bridge-" + callID
