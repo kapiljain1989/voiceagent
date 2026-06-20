@@ -159,6 +159,15 @@ func getOrCreateSIPRECSession(gw *gateway, callID string) *siprecSession {
 	}()
 
 	s.log.Info("copilot session starting")
+
+	// Fire webhook: call_started
+	if gw.webhookMgr != nil {
+		gw.webhookMgr.FireEvent("call_started", map[string]any{
+			"call_id": callID,
+			"caller":  s.callerNumber,
+		})
+	}
+
 	return s
 }
 
@@ -839,6 +848,18 @@ func (s *siprecSession) onCallEnd() {
 			s.log.Info("call record saved")
 		}
 		saveCancel()
+	}
+
+	// Fire webhook: call_ended
+	if s.gw.webhookMgr != nil {
+		s.gw.webhookMgr.FireEvent("call_ended", map[string]any{
+			"call_id":   s.callID,
+			"caller":    s.callerNumber,
+			"agent":     s.agentNumber,
+			"duration":  duration,
+			"sentiment": finalSentiment,
+			"summary":   parsed.Summary,
+		})
 	}
 }
 

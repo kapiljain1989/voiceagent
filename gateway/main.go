@@ -148,6 +148,7 @@ type gateway struct {
 	acd         *ACD
 	announcer   *QueueAnnouncer
 	webrtcMgr   *WebRTCManager
+	webhookMgr  *WebhookManager
 	sipServer   *SIPServer
 }
 
@@ -296,6 +297,8 @@ func main() {
 
 	gw.registerCallControlRoutes(mux)
 	gw.registerSupervisorRoutes(mux)
+	gw.registerWebhookRoutes(mux)
+	gw.webhookMgr = NewWebhookManager(gw)
 	queueMgr := NewQueueManager(gw)
 	gw.queueMgr = queueMgr
 	queueMgr.RegisterRoutes(mux)
