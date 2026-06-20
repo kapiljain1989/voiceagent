@@ -299,6 +299,7 @@ func main() {
 	gw.registerSupervisorRoutes(mux)
 	gw.registerWebhookRoutes(mux)
 	gw.webhookMgr = NewWebhookManager(gw)
+	gw.registerIVRRoutes(mux)
 	queueMgr := NewQueueManager(gw)
 	gw.queueMgr = queueMgr
 	queueMgr.RegisterRoutes(mux)

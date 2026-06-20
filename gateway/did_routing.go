@@ -22,6 +22,7 @@ type DIDRoute struct {
 	Priority            int             `json:"priority"`
 	TimeCondition       json.RawMessage `json:"time_condition,omitempty"`
 	OverflowDestination string          `json:"overflow_destination,omitempty"`
+	IvrID               *string         `json:"ivr_id,omitempty"`
 	Enabled             bool            `json:"enabled"`
 	CreatedAt           string          `json:"created_at,omitempty"`
 }
@@ -46,7 +47,7 @@ func (r *DIDRouter) loadRoutes() {
 
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, did_pattern, match_type, trunk_id, destination_type, destination_value,
-		        priority, time_condition, COALESCE(overflow_destination,''), enabled, created_at
+		        priority, time_condition, COALESCE(overflow_destination,''), enabled, created_at, ivr_id
 		 FROM did_routes WHERE enabled=true ORDER BY priority DESC, created_at ASC`)
 	if err != nil {
 		slog.Error("load DID routes", "err", err)
@@ -59,11 +60,15 @@ func (r *DIDRouter) loadRoutes() {
 		var rt DIDRoute
 		var trunkID sql.NullString
 		var timeCond sql.NullString
+		var ivrID sql.NullString
 		rows.Scan(&rt.ID, &rt.DIDPattern, &rt.MatchType, &trunkID,
 			&rt.DestinationType, &rt.DestinationValue,
-			&rt.Priority, &timeCond, &rt.OverflowDestination, &rt.Enabled, &rt.CreatedAt)
+			&rt.Priority, &timeCond, &rt.OverflowDestination, &rt.Enabled, &rt.CreatedAt, &ivrID)
 		if trunkID.Valid {
 			rt.TrunkID = &trunkID.String
+		}
+		if ivrID.Valid {
+			rt.IvrID = &ivrID.String
 		}
 		if timeCond.Valid && timeCond.String != "" {
 			rt.TimeCondition = json.RawMessage(timeCond.String)
@@ -83,7 +88,7 @@ func (r *DIDRouter) Reload() {
 
 // MatchDID finds the best route for a dialed number.
 // Returns destination type and value, or empty strings if no match.
-func (r *DIDRouter) MatchDID(dialedNumber string, trunkID string) (destType, destValue, overflow string) {
+func (r *DIDRouter) MatchDID(dialedNumber string, trunkID string) (destType, destValue, overflow, ivrID string) {
 	r.mu.RLock()
 	routes := r.routes
 	r.mu.RUnlock()
@@ -91,23 +96,22 @@ func (r *DIDRouter) MatchDID(dialedNumber string, trunkID string) (destType, des
 	dialedNumber = strings.TrimSpace(dialedNumber)
 
 	for _, rt := range routes {
-		// Check trunk scope
 		if rt.TrunkID != nil && *rt.TrunkID != trunkID {
 			continue
 		}
-
-		// Check time condition
 		if len(rt.TimeCondition) > 0 && !r.matchTimeCondition(rt.TimeCondition) {
 			continue
 		}
-
-		// Match pattern
 		if r.matchPattern(dialedNumber, rt.DIDPattern, rt.MatchType) {
-			return rt.DestinationType, rt.DestinationValue, rt.OverflowDestination
+			ivr := ""
+			if rt.IvrID != nil {
+				ivr = *rt.IvrID
+			}
+			return rt.DestinationType, rt.DestinationValue, rt.OverflowDestination, ivr
 		}
 	}
 
-	return "", "", ""
+	return "", "", "", ""
 }
 
 func (r *DIDRouter) matchPattern(number, pattern, matchType string) bool {

@@ -344,7 +344,29 @@ func (s *SIPServer) handleInvite(req *sip.Request, tx sip.ServerTransaction) {
 				trunkIDForRouting = trunk.ID
 			}
 		}
-		destType, destValue, _ := s.gw.didRouter.MatchDID(dialedNumber, trunkIDForRouting)
+		destType, destValue, _, ivrID := s.gw.didRouter.MatchDID(dialedNumber, trunkIDForRouting)
+
+		// Run IVR if configured for this DID
+		if ivrID != "" && copilot != nil {
+			ivrCtx, ivrCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			ivrFlow, err := LoadIVRFlow(ivrCtx, ivrID)
+			if err == nil && ivrFlow != nil {
+				slog.Info("IVR starting", "dialed", dialedNumber, "ivr", ivrFlow.Name)
+				ivrDestType, ivrDestValue := RunIVR(ivrCtx, ivrFlow, copilot, s.gw.announcer, slog.With("call_id", callID, "ivr", ivrFlow.Name))
+				if ivrDestType == "queue" && ivrDestValue != "" {
+					destType = "queue"
+					destValue = ivrDestValue
+				} else if ivrDestType == "agent" && ivrDestValue != "" {
+					destType = "agent"
+					destValue = ivrDestValue
+				} else if ivrDestType == "hangup" {
+					ivrCancel()
+					return
+				}
+			}
+			ivrCancel()
+		}
+
 		if destType == "queue" && destValue != "" {
 			queueName = destValue
 			slog.Info("DID routed", "dialed", dialedNumber, "queue", queueName)
