@@ -373,7 +373,6 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 			if sess.listener != nil {
 				sess.listener.Close()
 			}
-			// Cancel the copilot session
 			if sess.copilot != nil {
 				sess.copilot.cancel()
 			}
@@ -381,6 +380,21 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 		}
 	}
 	s.sessMu.Unlock()
+
+	// Close WebRTC bridge (so Console shows disconnected)
+	bridgeCallID := "bridge-" + callID
+	if s.gw.webrtcMgr != nil {
+		s.gw.webrtcMgr.mu.Lock()
+		if sess, ok := s.gw.webrtcMgr.sessions[bridgeCallID]; ok {
+			slog.Info("closing WebRTC bridge on caller BYE", "call_id", bridgeCallID)
+			if s.gw.acd != nil && sess.agentID != "" {
+				s.gw.acd.OnCallEnd(sess.agentID)
+			}
+			sess.close()
+			delete(s.gw.webrtcMgr.sessions, bridgeCallID)
+		}
+		s.gw.webrtcMgr.mu.Unlock()
+	}
 
 	// Stop announcements
 	if s.gw.announcer != nil {

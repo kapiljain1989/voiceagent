@@ -47,6 +47,8 @@ services:
   # ─── Data ───────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
+    ports:
+      - "5432:5432"
     environment:
       - POSTGRES_DB=voiceagent
       - POSTGRES_USER=voiceagent
@@ -61,16 +63,22 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6379:6379"
     command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
 
   # ─── AI ─────────────────────────────────────────────
   whisper:
     image: fedirz/faster-whisper-server:latest-cpu
+    ports:
+      - "8000:8000"
     environment:
       - WHISPER__MODEL=Systran/faster-whisper-base.en
 
   piper:
     image: artibex/piper-http:latest
+    ports:
+      - "5050:5000"
     environment:
       - MODEL_URL=https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx
 
