@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -124,6 +125,32 @@ func (s *SIPServer) Start() error {
 			slog.Error("SIP TCP server", "err", err)
 		}
 	}()
+
+	// TLS listener (SIP over TLS / SIPS)
+	certFile := os.Getenv("SIP_TLS_CERT")
+	keyFile := os.Getenv("SIP_TLS_KEY")
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			slog.Error("SIP TLS cert load failed", "err", err, "cert", certFile, "key", keyFile)
+		} else {
+			tlsConf := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
+			}
+			tlsAddr := os.Getenv("SIP_TLS_ADDR")
+			if tlsAddr == "" {
+				tlsAddr = ":5061"
+			}
+			go func() {
+				slog.Info("SIP TLS server starting", "addr", tlsAddr)
+				if err := s.server.ListenAndServeTLS(context.Background(), "tls", tlsAddr, tlsConf); err != nil {
+					slog.Error("SIP TLS server", "err", err)
+				}
+			}()
+			slog.Info("SIP TLS listener enabled", "addr", tlsAddr, "cert", certFile)
+		}
+	}
 
 	slog.Info("SIP server listening", "addr", s.addr, "rtp_range", fmt.Sprintf("%d-%d", s.rtpBase, s.rtpBase+100))
 	return nil
