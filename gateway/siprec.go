@@ -77,6 +77,12 @@ type siprecSession struct {
 	audioTaps   []chan []byte
 	audioTapsMu sync.Mutex
 
+	// Agent audio taps — listeners for agent audio (supervisor monitor)
+	agentTaps   []chan []byte
+	agentTapsMu sync.Mutex
+
+	whisperCh chan []byte // supervisor whisper → agent only
+
 	// RTP session — set when audio arrives via SIP/RTP (standalone mode)
 	rtpSession *siprecRTPSession
 
@@ -170,6 +176,37 @@ func (s *siprecSession) broadcastToTaps(frame []byte) {
 		}
 	}
 	s.audioTapsMu.Unlock()
+}
+
+func (s *siprecSession) AddAgentTap() chan []byte {
+	ch := make(chan []byte, pcmChanBufSize)
+	s.agentTapsMu.Lock()
+	s.agentTaps = append(s.agentTaps, ch)
+	s.agentTapsMu.Unlock()
+	return ch
+}
+
+func (s *siprecSession) RemoveAgentTap(ch chan []byte) {
+	s.agentTapsMu.Lock()
+	for i, t := range s.agentTaps {
+		if t == ch {
+			s.agentTaps = append(s.agentTaps[:i], s.agentTaps[i+1:]...)
+			break
+		}
+	}
+	s.agentTapsMu.Unlock()
+	close(ch)
+}
+
+func (s *siprecSession) broadcastToAgentTaps(frame []byte) {
+	s.agentTapsMu.Lock()
+	for _, ch := range s.agentTaps {
+		select {
+		case ch <- frame:
+		default:
+		}
+	}
+	s.agentTapsMu.Unlock()
 }
 
 // -------------------------------------------------------------------

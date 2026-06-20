@@ -8,6 +8,7 @@ const PAGE_ACCESS: Record<string, UserRole[]> = {
   "/agents":         ["admin", "supervisor"],
   "/calls":          ["admin", "supervisor", "agent"],
   "/console":        ["admin", "supervisor", "agent"],
+  "/supervisor":     ["admin", "supervisor"],
   "/documents":      ["admin"],
   "/security":       ["admin"],
   "/infrastructure": ["admin"],

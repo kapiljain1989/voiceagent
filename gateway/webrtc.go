@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -212,6 +213,9 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 				case siprecSess.pcmAgent <- pcm16k:
 				default:
 				}
+
+				// Broadcast to agent audio taps (supervisor monitor)
+				siprecSess.broadcastToAgentTaps(pcm16k)
 			}
 		}()
 	})
@@ -272,6 +276,26 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 				for len(frameBuf) >= frame16kSize {
 					chunk := frameBuf[:frame16kSize]
 					frameBuf = frameBuf[frame16kSize:]
+
+					// Mix in supervisor whisper audio (only agent hears)
+					if siprecSess.whisperCh != nil {
+						select {
+						case whisper := <-siprecSess.whisperCh:
+							nSamples := frame16kSize / 2
+							for si := 0; si < nSamples && si*2+1 < len(chunk) && si*2+1 < len(whisper); si++ {
+								cs := int32(int16(binary.LittleEndian.Uint16(chunk[si*2 : si*2+2])))
+								ws := int32(int16(binary.LittleEndian.Uint16(whisper[si*2 : si*2+2])))
+								sum := cs + ws
+								if sum > 32767 {
+									sum = 32767
+								} else if sum < -32768 {
+									sum = -32768
+								}
+								binary.LittleEndian.PutUint16(chunk[si*2:si*2+2], uint16(int16(sum)))
+							}
+						default:
+						}
+					}
 
 					pcm8k := resample(chunk, 16000, 8000)
 					ulaw := EncodeG711Ulaw(pcm8k)

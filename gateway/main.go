@@ -293,6 +293,7 @@ func main() {
 	})
 
 	gw.registerCallControlRoutes(mux)
+	gw.registerSupervisorRoutes(mux)
 	queueMgr := NewQueueManager(gw)
 	gw.queueMgr = queueMgr
 	queueMgr.RegisterRoutes(mux)
