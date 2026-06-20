@@ -58,6 +58,7 @@ func (d *Database) RunMigrations() error {
 		"migrations/007_call_recordings.up.sql",
 		"migrations/008_webhooks.up.sql",
 		"migrations/009_ivr.up.sql",
+		"migrations/010_multi_tenant.up.sql",
 	}
 
 	for _, f := range files {
