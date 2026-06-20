@@ -146,6 +146,7 @@ type gateway struct {
 	acd         *ACD
 	announcer   *QueueAnnouncer
 	webrtcMgr   *WebRTCManager
+	sipServer   *SIPServer
 }
 
 // -------------------------------------------------------------------
@@ -368,6 +369,7 @@ func main() {
 			if err := sipSrv.Start(); err != nil {
 				slog.Error("sip server start", "err", err)
 			}
+			gw.sipServer = sipSrv
 		}
 	}
 

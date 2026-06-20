@@ -498,6 +498,11 @@ func (wm *WebRTCManager) handleHangup(w http.ResponseWriter, r *http.Request) {
 	if siprecCallID != req.CallID {
 		slog.Info("ending SIPREC session from bridge hangup", "siprec_call_id", siprecCallID)
 
+		// Send SIP BYE to caller's phone
+		if wm.gw.sipServer != nil {
+			wm.gw.sipServer.SendBYE(siprecCallID)
+		}
+
 		siprecSessionsMu.Lock()
 		siprecSess, exists := siprecSessions[siprecCallID]
 		siprecSessionsMu.Unlock()
