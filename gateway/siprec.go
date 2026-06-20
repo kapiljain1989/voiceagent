@@ -10,6 +10,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 	"sync"
 	"time"
 
@@ -699,12 +701,26 @@ func (s *siprecSession) onCallEnd() {
 	copy(suggs, s.allSuggs)
 	s.convMu.Unlock()
 
+	duration := int(time.Since(s.startTime).Seconds())
+
 	if len(conv) == 0 {
-		s.log.Info("no conversation to summarize")
+		s.log.Info("no conversation to summarize — saving minimal record")
+		// Still persist call record for reporting
+		if database != nil {
+			endTime := time.Now()
+			rec := &CallRecord{
+				ID: callIDToUUID(s.callID), CallerNumber: s.callerNumber, CalledNumber: s.agentNumber,
+				Mode: "copilot", Status: "completed", StartTime: s.startTime,
+				EndTime: &endTime, Duration: duration, Sentiment: "neutral",
+				LLMModel: s.gw.cfg.ClaudeModel,
+			}
+			saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			database.SaveCall(saveCtx, rec)
+			saveCancel()
+			s.log.Info("minimal call record saved")
+		}
 		return
 	}
-
-	duration := int(time.Since(s.startTime).Seconds())
 
 	// Build transcript text for Claude
 	var transcript strings.Builder
@@ -789,6 +805,47 @@ func (s *siprecSession) onCallEnd() {
 	if s.gw.cfg.CRMWebhookURL != "" {
 		s.postWebhook(summary)
 	}
+
+	// Persist call to database for reporting
+	if database != nil {
+		transcriptJSON, _ := json.Marshal(conv)
+		suggsJSON, _ := json.Marshal(suggs)
+		vsJSON, _ := json.Marshal(voiceSentimentResult)
+		endTime := time.Now()
+
+		rec := &CallRecord{
+			ID:           callIDToUUID(s.callID),
+			CallerNumber: s.callerNumber,
+			CalledNumber: s.agentNumber,
+			Mode:         "copilot",
+			Status:       "completed",
+			StartTime:    s.startTime,
+			EndTime:      &endTime,
+			Duration:     duration,
+			Summary:      parsed.Summary,
+			Sentiment:    finalSentiment,
+			ActionItems:  parsed.ActionItems,
+			Commitments:  parsed.Commitments,
+			Transcript:   transcriptJSON,
+			Suggestions:  suggsJSON,
+			VoiceSentiment: vsJSON,
+			LLMModel:     s.gw.cfg.ClaudeModel,
+		}
+
+		saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := database.SaveCall(saveCtx, rec); err != nil {
+			s.log.Error("save call record", "err", err)
+		} else {
+			s.log.Info("call record saved")
+		}
+		saveCancel()
+	}
+}
+
+var callIDNamespace = uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8") // DNS namespace
+
+func callIDToUUID(callID string) string {
+	return uuid.NewSHA1(callIDNamespace, []byte(callID)).String()
 }
 
 func (s *siprecSession) generateSummary(ctx context.Context, transcript string) (string, error) {

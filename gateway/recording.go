@@ -248,6 +248,84 @@ func (gw *gateway) handleRecordingFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filePath)
 }
 
+func (gw *gateway) handleReportCalls(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	days := 7
+	if d := r.URL.Query().Get("days"); d != "" {
+		fmt.Sscanf(d, "%d", &days)
+	}
+	if database == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	data, err := database.CallVolumeByHour(ctx, days)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	if data == nil {
+		data = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+func (gw *gateway) handleReportAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	days := 7
+	if d := r.URL.Query().Get("days"); d != "" {
+		fmt.Sscanf(d, "%d", &days)
+	}
+	if database == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	data, err := database.AgentPerformance(ctx, days)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	if data == nil {
+		data = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+func (gw *gateway) handleReportSentiment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	days := 7
+	if d := r.URL.Query().Get("days"); d != "" {
+		fmt.Sscanf(d, "%d", &days)
+	}
+	if database == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	data, err := database.SentimentTrend(ctx, days)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	if data == nil {
+		data = []map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 func sanitizeCallID(callID string) string {
 	safe := make([]byte, 0, len(callID))
 	for _, c := range []byte(callID) {

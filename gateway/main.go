@@ -310,6 +310,9 @@ func main() {
 	mux.HandleFunc("/api/copilot/active", gw.handleActiveCopilot)
 	mux.HandleFunc("/api/recordings", gw.handleRecordingsList)
 	mux.HandleFunc("/api/recordings/", gw.handleRecordingFile)
+	mux.HandleFunc("/api/reports/calls", gw.handleReportCalls)
+	mux.HandleFunc("/api/reports/agents", gw.handleReportAgents)
+	mux.HandleFunc("/api/reports/sentiment", gw.handleReportSentiment)
 
 	webrtcMgr := NewWebRTCManager(gw)
 	webrtcMgr.RegisterRoutes(mux)

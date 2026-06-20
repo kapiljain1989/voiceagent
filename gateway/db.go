@@ -329,6 +329,85 @@ func (d *Database) DashboardStats(ctx context.Context) (map[string]any, error) {
 	}, nil
 }
 
+func (d *Database) CallVolumeByHour(ctx context.Context, days int) ([]map[string]any, error) {
+	if d == nil {
+		return nil, nil
+	}
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT date_trunc('hour', start_time) AS hour, COUNT(*)
+		FROM calls WHERE start_time > NOW() - $1::interval
+		GROUP BY hour ORDER BY hour`, fmt.Sprintf("%d days", days))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]any
+	for rows.Next() {
+		var hour time.Time
+		var count int
+		rows.Scan(&hour, &count)
+		result = append(result, map[string]any{"hour": hour.Format(time.RFC3339), "count": count})
+	}
+	return result, nil
+}
+
+func (d *Database) AgentPerformance(ctx context.Context, days int) ([]map[string]any, error) {
+	if d == nil {
+		return nil, nil
+	}
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT COALESCE(c.called_number, 'unknown') AS agent,
+			COUNT(*) AS calls,
+			COALESCE(AVG(c.duration), 0) AS avg_duration,
+			COALESCE(SUM(CASE WHEN c.sentiment='positive' THEN 1 ELSE 0 END), 0) AS positive,
+			COALESCE(SUM(CASE WHEN c.sentiment='negative' THEN 1 ELSE 0 END), 0) AS negative
+		FROM calls c
+		WHERE c.start_time > NOW() - $1::interval
+		GROUP BY agent ORDER BY calls DESC`, fmt.Sprintf("%d days", days))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]any
+	for rows.Next() {
+		var agent string
+		var calls, avgDur, pos, neg int
+		rows.Scan(&agent, &calls, &avgDur, &pos, &neg)
+		result = append(result, map[string]any{
+			"agent": agent, "calls": calls, "avg_duration": avgDur,
+			"positive": pos, "negative": neg,
+		})
+	}
+	return result, nil
+}
+
+func (d *Database) SentimentTrend(ctx context.Context, days int) ([]map[string]any, error) {
+	if d == nil {
+		return nil, nil
+	}
+	rows, err := d.conn.QueryContext(ctx, `
+		SELECT date_trunc('day', start_time) AS day,
+			COALESCE(SUM(CASE WHEN sentiment='positive' THEN 1 ELSE 0 END), 0) AS positive,
+			COALESCE(SUM(CASE WHEN sentiment='neutral' THEN 1 ELSE 0 END), 0) AS neutral,
+			COALESCE(SUM(CASE WHEN sentiment='negative' THEN 1 ELSE 0 END), 0) AS negative
+		FROM calls WHERE start_time > NOW() - $1::interval
+		GROUP BY day ORDER BY day`, fmt.Sprintf("%d days", days))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]any
+	for rows.Next() {
+		var day time.Time
+		var pos, neu, neg int
+		rows.Scan(&day, &pos, &neu, &neg)
+		result = append(result, map[string]any{
+			"day": day.Format("2006-01-02"), "positive": pos, "neutral": neu, "negative": neg,
+		})
+	}
+	return result, nil
+}
+
 // --- Utility ---
 
 func arrayToPostgres(arr []string) string {
