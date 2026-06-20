@@ -40,6 +40,7 @@ import {
   unmuteCall,
   transferCall,
   conferenceCall,
+  conferenceCallDrop,
   fetchQueues,
   pickCallFromQueue,
   updateAgentStatus,
@@ -449,6 +450,17 @@ export default function ConsolePage() {
     }
   }, [sseStream.transcripts, sseStream.suggestions, sseStream.summary, sseStream.voiceSentiment]);
 
+  // Sync conference state from SSE
+  useEffect(() => {
+    if (sseStream.conferenceState?.active) {
+      setConferenceActive(true);
+      setConferenceParty(sseStream.conferenceState.thirdParty || null);
+    } else if (sseStream.conferenceState === null && conferenceActive) {
+      setConferenceActive(false);
+      setConferenceParty(null);
+    }
+  }, [sseStream.conferenceState]);
+
   // React to remote call state changes (e.g., caller BYE)
   useEffect(() => {
     if (sseStream.callStateFromSSE === "ended") {
@@ -590,10 +602,60 @@ export default function ConsolePage() {
     }, 3000);
   }
 
-  function handleConference(agent: TeamMember) {
-    setConferenceActive(true);
-    setConferenceParty(agent.name);
-    showNotif(`${agent.name} joined the conference`, "violet");
+  async function handleConference(agent: TeamMember) {
+    const cid = siprecCallId || webrtc.callId;
+    if (!cid) return;
+    if (IS_DEMO) {
+      setConferenceActive(true);
+      setConferenceParty(agent.name);
+      showNotif(`${agent.name} joined the conference`, "violet");
+      return;
+    }
+    try {
+      const res = await conferenceCall(extractSIPRECId(cid), agent.name, "agent");
+      if (res.ok) {
+        setConferenceActive(true);
+        setConferenceParty(agent.name);
+        showNotif(`Ringing ${agent.name} for conference...`, "violet");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showNotif(data.error || "Conference failed", "rose");
+      }
+    } catch {
+      showNotif("Conference failed", "rose");
+    }
+  }
+
+  async function handleDropThird() {
+    const cid = siprecCallId || webrtc.callId;
+    if (!cid) return;
+    try {
+      await conferenceCallDrop(extractSIPRECId(cid), "third");
+      setConferenceActive(false);
+      setConferenceParty(null);
+      showNotif("Third party dropped", "cyan");
+    } catch {
+      showNotif("Drop failed", "rose");
+    }
+  }
+
+  async function handleLeaveConference() {
+    const cid = siprecCallId || webrtc.callId;
+    if (!cid) return;
+    try {
+      await conferenceCallDrop(extractSIPRECId(cid), "self");
+      setConferenceActive(false);
+      setConferenceParty(null);
+      webrtc.hangup();
+      setCallState("disconnected");
+      showNotif("Left conference", "cyan");
+    } catch {
+      showNotif("Leave failed", "rose");
+    }
+  }
+
+  function extractSIPRECId(id: string) {
+    return id.startsWith("bridge-") ? id.slice(7) : id;
   }
 
   function handleMergeTransfer() {
@@ -824,7 +886,15 @@ export default function ConsolePage() {
                   <Users size={12} strokeWidth={2} className="text-violet-400" />
                   <span className="text-[10px] font-mono text-violet-400 tracking-wider">3-WAY CONFERENCE</span>
                 </div>
-                <span className="text-xs text-slate-400">{conferenceParty} connected</span>
+                <span className="text-xs text-slate-400 block mb-2">{conferenceParty} connected</span>
+                <div className="flex gap-2">
+                  <button onClick={handleDropThird} className="flex-1 px-2 py-1 text-[9px] font-mono rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20 transition-colors">
+                    DROP {conferenceParty?.toUpperCase()}
+                  </button>
+                  <button onClick={handleLeaveConference} className="flex-1 px-2 py-1 text-[9px] font-mono rounded bg-slate-500/10 text-slate-400 border border-slate-500/20 hover:bg-slate-500/20 transition-colors">
+                    LEAVE
+                  </button>
+                </div>
               </div>
             )}
 

@@ -420,6 +420,150 @@ func (s *SIPServer) makeOutboundCall(callID, number, callerID string, trunk *SIP
 	}()
 }
 
+// dialSIPCall sets up a SIP call and returns the RTP session (used by conference for external third party).
+func (s *SIPServer) dialSIPCall(callID, number, callerID string, trunk *SIPTrunk) (*siprecRTPSession, error) {
+	log := slog.With("call_id", callID, "number", number)
+
+	localPort := s.allocateRTPPort()
+	localIP := getLocalIP()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	listener, err := NewRTPListener(localPort, "PCMU")
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("rtp listener: %w", err)
+	}
+
+	sdpBody := fmt.Sprintf("v=0\r\no=VoiceAgent %d %d IN IP4 %s\r\ns=VoiceAgent\r\nc=IN IP4 %s\r\nt=0 0\r\nm=audio %d RTP/AVP 0 101\r\na=rtpmap:0 PCMU/8000\r\na=rtpmap:101 telephone-event/8000\r\na=fmtp:101 0-16\r\na=sendrecv\r\na=ptime:20\r\n",
+		time.Now().UnixMilli(), time.Now().UnixMilli(), localIP, localIP, localPort)
+
+	trunkAddr := fmt.Sprintf("%s:%d", trunk.Address, trunk.Port)
+	requestURI := fmt.Sprintf("sip:%s@%s", number, trunkAddr)
+	fromURI := fmt.Sprintf("<sip:%s@%s>", callerID, localIP)
+	toURI := fmt.Sprintf("<sip:%s@%s>", number, trunk.Address)
+	contactURI := fmt.Sprintf("<sip:%s@%s%s>", callerID, localIP, s.addr)
+	branch := fmt.Sprintf("z9hG4bK-%d", time.Now().UnixNano())
+	fromTag := fmt.Sprintf("conf-%d", time.Now().UnixMilli())
+
+	invite := fmt.Sprintf("INVITE %s SIP/2.0\r\nVia: SIP/2.0/UDP %s%s;rport;branch=%s\r\nFrom: %s;tag=%s\r\nTo: %s\r\nCall-ID: %s\r\nCSeq: 1 INVITE\r\nContact: %s\r\nMax-Forwards: 70\r\nContent-Type: application/sdp\r\nContent-Length: %d\r\n\r\n%s",
+		requestURI, localIP, s.addr, branch, fromURI, fromTag, toURI, callID, contactURI, len(sdpBody), sdpBody)
+
+	addr, err := net.ResolveUDPAddr("udp4", trunkAddr)
+	if err != nil {
+		cancel()
+		listener.Close()
+		return nil, fmt.Errorf("resolve: %w", err)
+	}
+
+	conn, err := net.DialUDP("udp4", nil, addr)
+	if err != nil {
+		cancel()
+		listener.Close()
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+
+	log.Info("conference INVITE", "trunk", trunkAddr)
+	conn.Write([]byte(invite))
+
+	buf := make([]byte, 4096)
+	conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	n, err := conn.Read(buf)
+	if err != nil {
+		cancel()
+		listener.Close()
+		conn.Close()
+		return nil, fmt.Errorf("no response: %w", err)
+	}
+
+	response := string(buf[:n])
+	firstLine := strings.SplitN(response, "\r\n", 2)[0]
+
+	if strings.Contains(firstLine, "100") || strings.Contains(firstLine, "180") || strings.Contains(firstLine, "183") {
+		for {
+			conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+			n, err = conn.Read(buf)
+			if err != nil {
+				cancel()
+				listener.Close()
+				conn.Close()
+				return nil, fmt.Errorf("timeout: %w", err)
+			}
+			response = string(buf[:n])
+			firstLine = strings.SplitN(response, "\r\n", 2)[0]
+			if strings.Contains(firstLine, "200") {
+				break
+			}
+			if strings.Contains(firstLine, "4") || strings.Contains(firstLine, "5") || strings.Contains(firstLine, "6") {
+				cancel()
+				listener.Close()
+				conn.Close()
+				return nil, fmt.Errorf("rejected: %s", firstLine)
+			}
+		}
+	}
+
+	if !strings.Contains(firstLine, "200") {
+		cancel()
+		listener.Close()
+		conn.Close()
+		return nil, fmt.Errorf("not answered: %s", firstLine)
+	}
+
+	remoteRTPAddr := ""
+	remoteRTPPort := 0
+	if idx := strings.Index(response, "m=audio"); idx >= 0 {
+		fmt.Sscanf(response[idx:], "m=audio %d", &remoteRTPPort)
+	}
+	if idx := strings.Index(response, "c=IN IP4"); idx >= 0 {
+		fmt.Sscanf(response[idx:], "c=IN IP4 %s", &remoteRTPAddr)
+		remoteRTPAddr = strings.TrimSpace(remoteRTPAddr)
+	}
+
+	toTag := ""
+	if idx := strings.Index(response, "To:"); idx >= 0 {
+		toLine := response[idx:]
+		if tagIdx := strings.Index(toLine, "tag="); tagIdx >= 0 {
+			toTag = strings.TrimSpace(strings.SplitN(toLine[tagIdx+4:], "\r\n", 2)[0])
+			toTag = strings.Split(toTag, ";")[0]
+			toTag = strings.Split(toTag, ">")[0]
+		}
+	}
+
+	ack := fmt.Sprintf("ACK %s SIP/2.0\r\nVia: SIP/2.0/UDP %s%s;rport;branch=z9hG4bK-%d\r\nFrom: %s;tag=%s\r\nTo: %s;tag=%s\r\nCall-ID: %s\r\nCSeq: 1 ACK\r\nMax-Forwards: 70\r\nContent-Length: 0\r\n\r\n",
+		requestURI, localIP, s.addr, time.Now().UnixNano(), fromURI, fromTag, toURI, toTag, callID)
+	conn.Write([]byte(ack))
+
+	if remoteRTPAddr != "" && remoteRTPPort > 0 {
+		listener.SetRemoteAddr(remoteRTPAddr, remoteRTPPort)
+	}
+
+	sess := &siprecRTPSession{
+		callID:     callID,
+		fromTag:    fromTag,
+		toTag:      toTag,
+		remoteAddr: remoteRTPAddr,
+		remotePort: remoteRTPPort,
+		codec:      "PCMU",
+		localPort:  localPort,
+		listener:   listener,
+		cancelFunc: cancel,
+		sipFrom:    fromURI + ";tag=" + fromTag,
+		sipTo:      toURI,
+		sipCallID:  callID,
+		sipSource:  trunkAddr,
+		sipConn:    conn,
+		isOutbound: true,
+	}
+
+	s.sessMu.Lock()
+	s.sessions[callID+"_conf"] = sess
+	s.sessMu.Unlock()
+
+	log.Info("conference call answered", "remote_rtp", fmt.Sprintf("%s:%d", remoteRTPAddr, remoteRTPPort))
+	_ = ctx
+	return sess, nil
+}
+
 func extractHeader(msg, header string) string {
 	for _, line := range strings.Split(msg, "\r\n") {
 		if strings.HasPrefix(line, header+":") || strings.HasPrefix(line, header+" :") {

@@ -121,6 +121,15 @@ func (r *RTPListener) ReceiveAndDecode(ctx context.Context, pcmCh chan []byte, r
 		default:
 		}
 
+		// Conference mode: feed mixer instead of direct taps
+		if role == "caller" && copilot != nil && copilot.conference != nil {
+			select {
+			case copilot.conference.mixer.participants[0].pcmIn <- pcm:
+			default:
+			}
+			continue
+		}
+
 		// Broadcast to audio taps (WebRTC bridge)
 		if role == "caller" && copilot != nil {
 			copilot.broadcastToTaps(pcm)

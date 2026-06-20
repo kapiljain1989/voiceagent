@@ -66,10 +66,17 @@ export async function transferCall(
   });
 }
 
-export async function conferenceCall(callId: string, target: string) {
+export async function conferenceCall(callId: string, target: string, targetType: string = "agent") {
   return authFetch("/api/call/conference", {
     method: "POST",
-    body: JSON.stringify({ call_id: callId, target }),
+    body: JSON.stringify({ call_id: callId, target, target_type: targetType }),
+  });
+}
+
+export async function conferenceCallDrop(callId: string, who: "third" | "self") {
+  return authFetch("/api/call/conference/drop", {
+    method: "POST",
+    body: JSON.stringify({ call_id: callId, who }),
   });
 }
 
@@ -130,6 +137,7 @@ export function useSSEStream(callId: string | null) {
   const [summary, setSummary] = useState<PostCallSummaryData | null>(null);
   const [callStateFromSSE, setCallStateFromSSE] = useState<string | null>(null);
   const [voiceSentiment, setVoiceSentiment] = useState<VoiceSentimentData | null>(null);
+  const [conferenceState, setConferenceState] = useState<{ active: boolean; thirdParty?: string; thirdType?: string } | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   const reset = useCallback(() => {
@@ -137,6 +145,7 @@ export function useSSEStream(callId: string | null) {
     setSuggestions([]);
     setSummary(null);
     setCallStateFromSSE(null);
+    setConferenceState(null);
     setVoiceSentiment(null);
   }, []);
 
@@ -199,6 +208,10 @@ export function useSSEStream(callId: string | null) {
             sentiment: data.sentiment ?? "neutral",
             confidence: data.confidence ?? 0,
           });
+        } else if (data.type === "conference_started") {
+          setConferenceState({ active: true, thirdParty: data.third_party, thirdType: data.third_type });
+        } else if (data.type === "conference_ended" || data.type === "conference_failed") {
+          setConferenceState(null);
         } else if (data.type === "call_state") {
           setCallStateFromSSE(data.state);
         }
@@ -222,7 +235,7 @@ export function useSSEStream(callId: string | null) {
     };
   }, [callId]);
 
-  return { transcripts, suggestions, summary, callStateFromSSE, voiceSentiment, reset };
+  return { transcripts, suggestions, summary, callStateFromSSE, voiceSentiment, conferenceState, reset };
 }
 
 // ── Polling Hooks ──

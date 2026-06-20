@@ -26,8 +26,15 @@ type transferRequest struct {
 }
 
 type conferenceRequest struct {
+	CallID     string `json:"call_id"`
+	Target     string `json:"target"`
+	TargetType string `json:"target_type"` // agent, external
+	AgentID    string `json:"agent_id"`
+}
+
+type conferenceDropRequest struct {
 	CallID string `json:"call_id"`
-	Target string `json:"target"`
+	Who    string `json:"who"` // third, self
 }
 
 func (gw *gateway) newESLClient() *eslClient {
@@ -45,6 +52,7 @@ func (gw *gateway) registerCallControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/call/unmute", gw.handleCallUnmute)
 	mux.HandleFunc("/api/call/transfer", gw.handleCallTransfer)
 	mux.HandleFunc("/api/call/conference", gw.handleCallConference)
+	mux.HandleFunc("/api/call/conference/drop", gw.handleConferenceDrop)
 }
 
 // findWebRTCSession looks up a WebRTC session by call ID
@@ -273,9 +281,62 @@ func (gw *gateway) handleCallConference(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req conferenceRequest
-	json.NewDecoder(r.Body).Decode(&req)
-	// Conference not yet implemented for standalone mode
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "conference not yet implemented"})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if req.CallID == "" || req.Target == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "call_id and target required"})
+		return
+	}
+
+	targetType := req.TargetType
+	if targetType == "" {
+		targetType = "agent"
+	}
+
+	siprecCallID := extractSIPRECCallID(req.CallID)
+	slog.Info("conference request", "call_id", siprecCallID, "target", req.Target, "type", targetType)
+
+	cs, err := startConference(gw, siprecCallID, targetType, req.Target)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":      "conference_started",
+		"call_id":     cs.callID,
+		"third_party": req.Target,
+	})
+}
+
+func (gw *gateway) handleConferenceDrop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var req conferenceDropRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	siprecCallID := extractSIPRECCallID(req.CallID)
+
+	switch req.Who {
+	case "third":
+		if err := dropThirdParty(siprecCallID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "third_party_dropped"})
+	case "self":
+		endConference(siprecCallID)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "left_conference"})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "who must be 'third' or 'self'"})
+	}
 }
 
 func (gw *gateway) broadcastCallState(callID, state string) {

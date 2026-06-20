@@ -181,6 +181,19 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 
 				agentFrames++
 
+				// Conference mode: feed mixer instead of direct send
+				if siprecSess.conference != nil {
+					select {
+					case siprecSess.conference.mixer.participants[1].pcmIn <- pcm16k:
+					default:
+					}
+					select {
+					case siprecSess.pcmAgent <- pcm16k:
+					default:
+					}
+					continue
+				}
+
 				// Send agent voice to caller: prefer RTP path (standalone), fall back to WebSocket
 				if siprecSess.rtpSession != nil && siprecSess.rtpSession.listener != nil {
 					if err := siprecSess.rtpSession.listener.SendPCM(pcm16k); err != nil {
@@ -250,8 +263,8 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					return
 				}
-				// Skip forwarding caller audio when on hold
-				if sess.onHold {
+				// Skip forwarding when on hold or in conference (mixer handles output)
+				if sess.onHold || siprecSess.conference != nil {
 					continue
 				}
 				frameBuf = append(frameBuf, frame...)

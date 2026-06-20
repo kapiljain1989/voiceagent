@@ -80,6 +80,8 @@ type siprecSession struct {
 	// RTP session — set when audio arrives via SIP/RTP (standalone mode)
 	rtpSession *siprecRTPSession
 
+	conference *ConferenceSession // non-nil during 3-way conference
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	log    *slog.Logger
