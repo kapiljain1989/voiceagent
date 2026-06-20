@@ -369,6 +369,7 @@ func main() {
 			if err := sipSrv.Start(); err != nil {
 				slog.Error("sip server start", "err", err)
 			}
+			sipSrv.RegisterOutboundRoutes(mux)
 			gw.sipServer = sipSrv
 		}
 	}

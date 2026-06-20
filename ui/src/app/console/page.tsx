@@ -455,7 +455,23 @@ export default function ConsolePage() {
       setTimeout(() => setCallState("connected"), 2200);
     } else {
       try {
-        await webrtc.dial(phoneNumber, "console-agent");
+        setCallState("dialing");
+        // Initiate outbound call via SIP trunk
+        const res = await authFetch("/api/call/outbound", {
+          method: "POST",
+          body: JSON.stringify({
+            number: phoneNumber,
+            agent_id: agentProfile?.id,
+          }),
+        });
+        const data = await res.json();
+        if (data.call_id) {
+          setSiprecCallId(data.call_id);
+          showNotif(`Dialing ${phoneNumber}...`, "cyan");
+        } else {
+          showNotif(data.error || "Dial failed", "rose");
+          setCallState("idle");
+        }
       } catch {
         setCallState("idle");
       }
