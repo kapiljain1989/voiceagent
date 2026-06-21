@@ -113,21 +113,76 @@ open http://localhost:3000
 
 ---
 
-## Connecting to Your SBC
+## Deployment Modes
 
-VoiceAgent works with any SBC that supports standard SIP. The gateway acts as a SIP User Agent Server (UAS) that accepts INVITEs and handles RTP directly.
+VoiceAgent supports two deployment modes. Choose based on whether you want to route calls through VoiceAgent or observe them passively.
 
-### Direct SIP Trunk (B2BUA Mode)
+### Mode 1: Standalone B2BUA (Call Routing)
 
-Configure your SBC to send calls to VoiceAgent as a SIP trunk peer.
+VoiceAgent acts as a SIP Back-to-Back User Agent. Calls route through the gateway — it accepts SIP INVITEs, handles RTP media directly, bridges audio to agents via WebRTC, and runs the full AI copilot pipeline. The SBC sends calls to VoiceAgent as a trunk peer.
+
+```
+Customer ──► SBC ──► VoiceAgent (:5060) ──► Agent (WebRTC Console)
+                         │
+                         ├── IVR prompts (TTS)
+                         ├── ACD routing to queue/agent
+                         ├── Live transcription (Whisper)
+                         ├── AI copilot coaching (Claude)
+                         ├── Voice sentiment analysis
+                         ├── Call recording (stereo WAV)
+                         └── Post-call summary + webhook
+```
+
+**Use when:** You want VoiceAgent to handle calls end-to-end — IVR, routing, agent desktop, AI copilot, recording. The SBC/PBX hands off calls entirely.
 
 **Gateway configuration:**
 ```bash
 SIP_LISTEN_ADDR=":5060"    # SIP signaling port (UDP + TCP)
-MODE=standalone            # No FreeSWITCH, gateway handles everything
+MODE=standalone            # Full B2BUA, no FreeSWITCH
 ```
 
-**SBC configuration** — point a SIP trunk to `<VOICEAGENT_IP>:5060`:
+### Mode 2: SIPREC Observer (Passive Monitoring)
+
+VoiceAgent observes calls without routing them. Your SBC/PBX owns the call entirely — VoiceAgent receives a copy of the audio via SIPREC (RFC 7866). Both caller and agent audio streams are forked to VoiceAgent for real-time AI processing. The call path is untouched.
+
+```
+Customer ──► SBC/PBX ──► Agent (existing phone system)
+                │
+                └── SIPREC fork (RFC 7866) ──► VoiceAgent (:5060)
+                                                    │
+                                                    ├── Live transcription
+                                                    ├── AI copilot coaching → SSE → agent dashboard
+                                                    ├── Voice sentiment analysis
+                                                    ├── Robocall detection
+                                                    ├── PII masking
+                                                    └── Post-call summary + webhook
+```
+
+**Use when:** You don't want to change your call routing. VoiceAgent is a read-only observer — it can't drop or transfer calls, but it provides full AI copilot, transcription, sentiment, and analytics on every call. Zero risk to your existing telephony.
+
+**How SIPREC works:**
+1. SBC receives a call and establishes media with both parties
+2. SBC sends a SIPREC INVITE to VoiceAgent with multipart SDP containing both audio streams
+3. VoiceAgent parses the RFC 7866 metadata XML to identify caller vs agent streams
+4. VoiceAgent receives RTP from both legs, runs STT on each independently
+5. Transcripts, coaching suggestions, and sentiment are broadcast via SSE to the agent dashboard
+6. At call end, VoiceAgent generates summary and fires CRM webhook
+
+**Gateway configuration:**
+```bash
+SIP_LISTEN_ADDR=":5060"    # Accepts SIPREC INVITEs
+MODE=standalone            # Same binary, auto-detects SIPREC vs direct calls
+```
+
+**SIPREC vs B2BUA — automatic detection:** The gateway auto-detects whether an incoming INVITE is a regular SIP call or a SIPREC session by checking for multipart SDP and SIPREC metadata. No configuration needed — the same gateway handles both modes simultaneously.
+
+---
+
+## Connecting to Your SBC
+
+### B2BUA Mode — SIP Trunk Configuration
+
+Point your SBC's trunk to `<VOICEAGENT_IP>:5060`:
 
 | SBC | Configuration |
 |-----|--------------|
@@ -138,16 +193,29 @@ MODE=standalone            # No FreeSWITCH, gateway handles everything
 | **Asterisk** | `[voiceagent]` trunk → `host=<VOICEAGENT_IP>`, `port=5060` |
 | **FreeSWITCH** | Gateway profile → `<param name="proxy" value="<VOICEAGENT_IP>:5060"/>` |
 
-### SIPREC Observer Mode
+### SIPREC Mode — Recording Server Configuration
 
-For passive monitoring without routing calls through VoiceAgent, configure your SBC's SIPREC recording server:
+Point your SBC's SIPREC recording server to `<VOICEAGENT_IP>:5060`:
 
 | SBC | Configuration |
 |-----|--------------|
-| **Cisco CUBE** | `media-recording <VOICEAGENT_IP> port 5060` |
-| **AudioCodes** | SIP Recording → Recording Server = `<VOICEAGENT_IP>:5060` |
-| **Oracle SBC** | session-recording → destination = `sip:<VOICEAGENT_IP>:5060` |
-| **Kamailio** | `siprec_start_recording("sip:<VOICEAGENT_IP>:5060")` |
+| **Cisco CUBE** | `media-recording <VOICEAGENT_IP> port 5060` under `dial-peer` |
+| **AudioCodes** | Administration → SIP Recording → Recording Server = `<VOICEAGENT_IP>:5060` |
+| **Oracle SBC** | `session-recording` → `destination sip:<VOICEAGENT_IP>:5060` |
+| **Kamailio** | `siprec_start_recording("sip:<VOICEAGENT_IP>:5060")` in route block |
+| **Ribbon (Sonus)** | Call Recording Profile → Recording Server = `<VOICEAGENT_IP>:5060` |
+| **Genesys** | Recording → SIP Recording Server → `sip:<VOICEAGENT_IP>:5060` |
+
+### SIPREC Features
+
+| Feature | Details |
+|---------|---------|
+| **RFC 7866** | Full SIPREC metadata XML parsing — participant roles, stream labels, session IDs |
+| **Dual-stream** | Separate caller and agent audio streams for independent transcription |
+| **Auto-diarization** | Speaker labels from SIPREC metadata (no AI-based diarization needed) |
+| **Codec support** | G.711 u-law (PCMU), G.711 A-law (PCMA) — standard telephony codecs |
+| **No call impact** | Read-only observer — cannot drop, hold, or transfer the original call |
+| **Concurrent** | Handles B2BUA and SIPREC calls simultaneously on the same port |
 
 ### SIP Trunk Security
 
