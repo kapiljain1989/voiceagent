@@ -1,490 +1,356 @@
 # Quick Setup Guide
 
-Get the AI Call Center Platform running in under 5 minutes.
+Get the AI Call Center Platform running in under 10 minutes. Three deployment options:
+
+| Mode | Best For | Services | SIP Mode |
+|------|----------|----------|----------|
+| **Docker Compose** | Local dev, demo | All-in-one on host | FreeSWITCH B2BUA or Standalone |
+| **KinD** | Local K8s dev | KinD cluster | Standalone (hostNetwork) |
+| **K3s** | Production | Remote cluster | Standalone (hostNetwork) |
 
 ---
 
 ## Prerequisites
 
-Install these before starting:
-
 ```bash
 # macOS
-brew install docker kind kubectl go node portaudio baresip sipp
+brew install docker kind kubectl go node
 
 # Verify
 docker --version        # 24+
 go version              # 1.22+
 node --version          # 22+
 kind version            # 0.20+
+kubectl version --client
 ```
 
-### GCP Credentials
+### GCP Credentials (Optional)
 
-Claude and Gemini run on Vertex AI. STT, TTS, and all other services run locally.
+Required only for Claude/Gemini LLM features (co-pilot suggestions, post-call summaries). All other features (STT, call routing, queue, WebRTC, supervisor) work without GCP.
 
 ```bash
-# Login to GCP
 gcloud auth application-default login
-
-# Set your project (must have Vertex AI API enabled)
 export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 export CLOUD_ML_REGION="us-east5"
 ```
 
 ---
 
-## Option A: Docker Compose (Recommended)
+## Option A: Docker Compose
 
-The fastest path. Starts all 10 services with a single command.
+Three variants available depending on your use case.
 
-### 1. Clone and Start
+### A1. Full Platform (FreeSWITCH B2BUA)
+
+10 services including FreeSWITCH for SIP trunk termination.
 
 ```bash
 git clone https://github.com/kapiljain1989/voiceagent.git
 cd voiceagent
 
 # Set your LAN IP (required for SIP RTP addressing)
-export EXT_IP=$(ipconfig getifaddr en0)  # macOS
+export EXT_IP=$(ipconfig getifaddr en0)    # macOS
 # export EXT_IP=$(hostname -I | awk '{print $1}')  # Linux
 
 # Start everything
 docker compose -f docker-compose.sip.yml up -d
 ```
 
-### 2. Verify Services
+Services started:
+```
+gateway       :8080    HTTP/WebSocket API
+freeswitch    :5070    SIP signaling
+whisper       :8000    STT (faster-whisper)
+piper         :5000    TTS
+postgres      :5432    Database
+chromadb      :8200    Vector store
+ui            :3000    Next.js dashboard
+redis         :6379    Session store
+prometheus    :9090    Metrics
+grafana       :3001    Dashboards
+```
+
+### A2. Standalone B2BUA (No FreeSWITCH)
+
+Gateway acts as SIP B2BUA directly. Uses host networking for SIP+RTP.
 
 ```bash
-# Check all 10 containers are running
-docker compose -f docker-compose.sip.yml ps
+export EXT_IP=$(ipconfig getifaddr en0)
 
+docker compose -f docker-compose.standalone.yml up -d
+```
+
+Services: Gateway (:5060 SIP + :8080 HTTP), Whisper, PostgreSQL, ChromaDB, UI, Redis.
+
+### A3. SIPREC Observer (Helper Mode)
+
+Your SBC/PBX owns the call. VoiceAgent observes via SIPREC and provides AI assist.
+
+```bash
+docker compose -f docker-compose.helper.yml up -d
+# or
+make helper
+```
+
+Point your SBC's SIPREC recording server to `<HOST_IP>:5060`.
+
+| SBC | Config |
+|-----|--------|
+| **Cisco CUBE** | `media-recording <HOST_IP> port 5060` |
+| **AudioCodes** | Recording Server = `<HOST_IP>:5060` |
+| **Oracle SBC** | destination = `sip:<HOST_IP>:5060` |
+| **Kamailio** | `siprec_start_recording("sip:<HOST_IP>:5060")` |
+
+### Verify (all Docker Compose variants)
+
+```bash
 # Health check
 curl http://localhost:8080/healthz
-# → {"status":"ok","sessions":0}
-```
 
-Expected services:
-```
-voiceagent-gateway-1      Up    :8080
-voiceagent-freeswitch-1   Up    :5070
-voiceagent-whisper-1      Up    :8000
-voiceagent-piper-1        Up    :5000
-voiceagent-postgres-1     Up    :5432
-voiceagent-chromadb-1     Up    :8200
-voiceagent-ui-1           Up    :3000
-voiceagent-redis-1        Up    :6379
-voiceagent-prometheus-1   Up    :9090
-voiceagent-grafana-1      Up    :3001
-```
-
-### 3. Login & Get Auth Token
-
-Authentication is enabled by default. All API calls (except `/healthz`, `/metrics`, `/ws`, `/siprec`) require a JWT token.
-
-```bash
-# Login (default credentials: admin / admin)
+# Login (default: admin / admin)
 TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}' | jq -r .token)
 
-echo $TOKEN  # Should print a JWT token
+# Open dashboard
+open http://localhost:3000
 ```
 
-### 4. Open the Dashboard
-
-```
-http://localhost:3000
-```
-
-Login with `admin` / `admin`.
-
-### 5. Index Knowledge Base Documents
+### Cleanup
 
 ```bash
-curl -X POST http://localhost:8080/api/documents \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name": "Insurance Policy",
-    "category": "policy",
-    "content": "Section 4.2.1: Water damage from burst pipes is covered. Deductible is $500 for Tier 2. Claims must be filed within 30 days. Emergency repairs up to $1000 pre-approved."
-  }'
-```
-
-### 6. Make Your First Call
-
-**WebSocket voice call (simplest — uses your mic/speaker):**
-```bash
-cd test && ./livecall ws://localhost:8080/ws
-# Speak into your microphone — Claude responds through your speaker
-# Ctrl+C to hang up
-```
-
-**SIP call via baresip:**
-```bash
-cd test && SIP_PORT=5070 ./test-sip-call.sh
-# Type: /dial 1000
-```
-
-**Co-pilot call center demo:**
-```bash
-cd test && ./callcenter-live.sh
-# Open http://localhost:3000/calls/live
-# Paste the Call ID → speak → see co-pilot suggestions
+docker compose -f <compose-file> down      # Stop services
+docker compose -f <compose-file> down -v    # Stop + delete data
 ```
 
 ---
 
-## Option B: Kubernetes (Istio + Gateway API)
+## Option B: KinD (Local Kubernetes)
 
-All 10 services deploy to K8s with Istio service mesh (STRICT mTLS) and Gateway API for HTTP/WebSocket ingress. Four overlays are available:
+Local K8s development cluster using KinD. Gateway runs with `hostNetwork` for SIP/RTP.
 
-| Overlay | FreeSWITCH Networking | Istio | Use Case |
-|---------|----------------------|-------|----------|
-| `local` | hostNetwork | No | KinD local dev |
-| `cloud` | LoadBalancer | Yes | GKE / EKS / AKS |
-| `on-prem` | MetalLB L2 | Yes | Bare metal data center |
-| `air-gapped` | hostNetwork | Yes | Zero internet (local Ollama) |
-
-### Prerequisites (K8s)
+### 1. Create Cluster & Build Images
 
 ```bash
-brew install kind kubectl istioctl
-```
-
-### Local KinD Cluster
-
-```bash
-# Build all images, create cluster, deploy 10 services
+# One command: create cluster, build images, load into KinD, deploy
 make all
+```
 
-# Port-forward for local access
-make port-forward-ui &          # http://localhost:3000
-kubectl -n voiceagent port-forward svc/media-gateway 8080:8080 &
+Or step by step:
 
-# Verify
+```bash
+make kind-up       # Create KinD cluster from kind-config.yaml
+make build-all     # Build gateway, freeswitch, whisper, UI images
+make load-all      # Load images into KinD
+make secret        # Create GCP credentials (optional, warn if missing)
+make deploy-local  # Deploy with local overlay
+```
+
+### 2. Verify
+
+```bash
+# Check pods
+kubectl -n voiceagent get pods
+
+# Port-forward
+make port-forward-ui &                                              # :3000
+kubectl -n voiceagent port-forward svc/media-gateway 8080:8080 &    # :8080
+
+# Health check
 curl http://localhost:8080/healthz
-kubectl -n voiceagent get pods   # All 10 pods Running
 ```
 
-### Cloud Deployment (GKE / EKS / AKS)
+### 3. Access
+
+| Service | URL |
+|---------|-----|
+| Dashboard | http://localhost:3000 |
+| Gateway API | http://localhost:8080 |
+| Grafana | http://localhost:3001 (`make port-forward-grafana`) |
+| SIP | localhost:5062 (via KinD nodePort) |
+
+### Cleanup
 
 ```bash
-# Install Istio + deploy all services with Gateway API
-make deploy-cloud
-
-# Discover FreeSWITCH LoadBalancer IP and configure SDP
-make freeswitch-ip
-
-# Verify Istio mesh (9 services with sidecars, FreeSWITCH excluded)
-make mesh-status
-
-# Check Gateway API routes
-kubectl -n voiceagent get httproutes
-kubectl -n voiceagent get gateways
+make platform-undeploy   # Remove services, keep cluster
+make clean               # Delete cluster + images
 ```
-
-### On-Premises Deployment (MetalLB)
-
-```bash
-# Install MetalLB first
-kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
-
-# Deploy with Istio + MetalLB
-make deploy-on-prem
-
-# Configure FreeSWITCH external IP
-make freeswitch-ip
-```
-
-> Edit `k8s/overlays/on-prem/metallb-config.yaml` to set your site's IP range before deploying.
-
-### Air-Gapped Deployment
-
-```bash
-kubectl apply -k k8s/overlays/air-gapped
-```
-
-### K8s Port Forwarding
-
-```bash
-make port-forward-ui            # Dashboard → localhost:3000
-make port-forward-grafana       # Grafana → localhost:3001
-make port-forward-prometheus    # Prometheus → localhost:9090
-```
-
-## Option C: Standalone Helper (No FreeSWITCH)
-
-Plug-and-play SIPREC observer. Your SBC/PBX owns the call — VoiceAgent just observes and provides AI assist.
-
-```bash
-# Deploy (8 services — no FreeSWITCH, no Piper)
-docker compose -f docker-compose.helper.yml up -d
-
-# Or via Makefile
-make helper
-```
-
-Expected services:
-```
-voiceagent-gateway-1      Up    :8080 + :5060 (SIP)
-voiceagent-whisper-1      Up    :8000
-voiceagent-postgres-1     Up    :5432
-voiceagent-chromadb-1     Up    :8200
-voiceagent-ui-1           Up    :3000
-voiceagent-redis-1        Up    :6379
-voiceagent-prometheus-1   Up    :9090
-voiceagent-grafana-1      Up    :3001
-```
-
-### SBC Configuration (one line)
-
-| SBC | Config |
-|-----|--------|
-| **Cisco CUBE** | `media-recording <VOICEAGENT_IP> port 5060` |
-| **AudioCodes** | Recording Server = `<VOICEAGENT_IP>:5060` |
-| **Oracle SBC** | destination = `sip:<VOICEAGENT_IP>:5060` |
-| **Kamailio** | `siprec_start_recording("sip:<VOICEAGENT_IP>:5060")` |
-
-All features work automatically: live transcript, co-pilot suggestions, robocall detection, PII masking, voice sentiment, post-call summary.
 
 ---
 
-## Configuration Checklist
+## Option C: K3s Production
+
+Production deployment on a remote K3s/K8s cluster with a public IP. Uses env vars for all deployment-specific values (no hardcoded IPs or registries).
+
+### 1. Prerequisites
+
+- A running K3s cluster with `kubectl` access
+- A container registry (quay.io, Docker Hub, ECR, etc.)
+- The cluster node's public IP address
+
+```bash
+# Required env vars
+export EXTERNAL_IP="1.2.3.4"                  # Cluster node public IP
+export REGISTRY="quay.io/your-org"            # Container registry
+export REGISTRY_USER="your-username"          # Registry login
+export REGISTRY_PASSWORD="your-token"         # Registry password
+```
+
+### 2. Registry Secret
+
+```bash
+make registry-secret
+```
+
+### 3. Build & Push Images
+
+```bash
+make push
+```
+
+This runs `generate-k3s` (creates k8s overlay from templates) → `build-k3s` (builds linux/amd64 gateway + UI images with `NEXT_PUBLIC_GATEWAY_URL=http://$EXTERNAL_IP:30080` baked in) → pushes to registry.
+
+### 4. Deploy
+
+```bash
+make deploy-k3s
+```
+
+Deploys all services and waits for rollout:
+- Gateway (hostNetwork, SIP :5062, HTTP :8080)
+- Whisper (NodePort 30085 for hostNetwork gateway)
+- UI (NodePort 30030)
+- PostgreSQL, Redis, ChromaDB, Prometheus, Grafana
+
+### 5. GCP Credentials (Optional)
+
+If you want Claude/Gemini LLM features:
+
+```bash
+export GCP_PROJECT_ID="your-project-id"
+export GCP_REGION="us-east5"
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
+make secret
+```
+
+If GCP is not configured, the gateway starts with a warning but all non-LLM features work.
+
+### 6. Verify
+
+```bash
+# Pod status
+make status
+
+# or
+kubectl -n voiceagent get pods -o wide
+```
+
+### 7. Access
+
+| Service | URL |
+|---------|-----|
+| Dashboard | `http://<EXTERNAL_IP>:30030` |
+| Gateway API | `http://<EXTERNAL_IP>:30080` |
+| SIP | `<EXTERNAL_IP>:5062` (UDP/TCP) |
+| RTP | `<EXTERNAL_IP>:30000-30100` (UDP) |
+| Grafana | `http://<EXTERNAL_IP>:30090` |
+
+### 8. Update & Redeploy
+
+After code changes:
+
+```bash
+make push                  # Rebuild + push images
+kubectl -n voiceagent rollout restart deployment/media-gateway deployment/ui
+```
+
+### Cleanup
+
+```bash
+make undeploy-k3s
+```
+
+---
+
+## Login & Authentication
+
+Authentication is enabled by default. Default credentials: `admin` / `admin`.
+
+```bash
+# Get JWT token
+TOKEN=$(curl -s -X POST http://<HOST>:8080/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | jq -r .token)
+
+# Use token for API calls
+curl -H "Authorization: Bearer $TOKEN" http://<HOST>:8080/api/agents
+```
+
+Dashboard login: same `admin` / `admin` at `http://<HOST>:3000`.
+
+---
+
+## Environment Variables
 
 ### Required
 
-| Variable | Where to Set | Description |
-|----------|-------------|-------------|
-| `ANTHROPIC_VERTEX_PROJECT_ID` | Shell env | GCP project with Vertex AI enabled |
-| `CLOUD_ML_REGION` | Shell env | Vertex AI region (default: `us-east5`) |
-| `EXT_IP` | Shell env | Your LAN IP (for SIP RTP) |
+| Variable | Modes | Description |
+|----------|-------|-------------|
+| `EXT_IP` | Docker Compose | LAN IP for SIP RTP addressing |
+| `EXTERNAL_IP` | K3s | Cluster node public IP |
+| `REGISTRY` | K3s | Container registry (e.g. `quay.io/org`) |
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AUTH_ENABLED` | `true` | Enable JWT authentication |
-| `JWT_SECRET` | `voiceagent-production-secret` | JWT signing key (change in production) |
-| `VOICEAGENT_MODE` | `gateway` | `standalone` (SIPREC helper) or `gateway` (full B2BUA) |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis URL for distributed sessions |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | *(none)* | GCP project for Claude/Gemini |
+| `CLOUD_ML_REGION` | `us-east5` | Vertex AI region |
+| `VOICEAGENT_MODE` | `gateway` | `standalone` (SIP B2BUA) or `gateway` (FreeSWITCH) |
+| `AUTH_ENABLED` | `true` | JWT authentication |
+| `JWT_SECRET` | `voiceagent-production-secret` | JWT signing key (change in production!) |
 | `CLAUDE_MODEL` | `claude-3-5-haiku@20241022` | LLM model |
-| `CRM_WEBHOOK_URL` | *(empty)* | POST call summaries here |
-| `CRM_WEBHOOK_TOKEN` | *(empty)* | Webhook auth token |
-| `ACTION_RESCHEDULE_URL` | *(empty)* | Self-service reschedule API |
-| `ACTION_CANCEL_URL` | *(empty)* | Self-service cancel API |
+| `REDIS_URL` | `redis://redis:6379/0` | Redis URL |
+| `CRM_WEBHOOK_URL` | *(empty)* | POST call summaries to external CRM |
 
 ---
 
-## Testing Each Feature
+## Port Reference
 
-> All API calls require `Authorization: Bearer $TOKEN`. Get a token first:
-> ```bash
-> TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
->   -H 'Content-Type: application/json' \
->   -d '{"username":"admin","password":"admin"}' | jq -r .token)
-> ```
-
-### Interactive AI Agent
-```bash
-cd test && ./livecall ws://localhost:8080/ws
-```
-
-### Co-Pilot Agent Assist
-```bash
-cd test && ./callcenter-live.sh
-```
-
-### Robocall Detection
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/robocall/test \
-  -d '{"text":"Press 1 for your auto warranty"}'
-```
-
-### PII Masking
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/security/pii/test \
-  -d '{"text":"My SSN is 123-45-6789"}'
-```
-
-### RAG Search
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/documents/search \
-  -d '{"query":"water damage coverage"}'
-```
-
-### LLM Test
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/llm/test \
-  -d '{"provider":"anthropic-vertex","model":"claude-3-5-haiku@20241022","prompt":"Hello"}'
-```
-
-### Failover Status
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/failover/status
-```
-
-### DTMF Parsing
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/dtmf/test \
-  -d '{"text":"482910"}'
-```
-
-### Blocklist
-```bash
-# Add
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/blocklist \
-  -d '{"number":"+15551234567","reason":"spam"}'
-
-# List
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/blocklist
-```
-
-### SIP Trunk Management
-```bash
-# Add trunk
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/trunks \
-  -d '{"name":"My SBC","address":"sbc.example.com","register":false}'
-
-# List trunks
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/trunks
-```
-
-### Self-Service Webhooks
-```bash
-# Configure
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/actions/webhooks \
-  -d '{"reschedule":"https://crm.example.com/api"}'
-
-# View
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/actions/webhooks
-```
-
-### Prometheus & Grafana
-```bash
-# Raw metrics (no auth required)
-curl http://localhost:8080/metrics
-
-# Prometheus UI
-open http://localhost:9090
-
-# Grafana dashboards
-open http://localhost:3001
-```
-
-### Voice Sentiment & Config
-```bash
-# Check deployment mode
-curl http://localhost:8080/api/config | python3 -m json.tool
-
-# Active copilot sessions with live voice sentiment
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8080/api/copilot/active | python3 -m json.tool
-```
-
----
-
-## SBC Configuration
-
-> Full SBC integration guide: [`docs/sbc-configuration.md`](sbc-configuration.md) — covers Cisco CUBE, AudioCodes Mediant, Oracle SBC, Kamailio, and Twilio with SIPREC setup.
-
-### Via API (Recommended)
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/trunks \
-  -d '{"name":"My SBC","address":"sbc.example.com","register":false}'
-```
-
-### Twilio SIP Trunk
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  -X POST http://localhost:8080/api/trunks \
-  -d '{
-    "name": "Twilio Production",
-    "address": "your-trunk.pstn.twilio.com",
-    "register": true,
-    "username": "your-trunk-sid",
-    "password": "your-auth-token",
-    "caller_id": "+15559876543"
-  }'
-```
-
-### Cisco CUBE / AudioCodes
-Copy the pre-configured profile from `freeswitch/config/sip_profiles/enterprise/` to `sip_profiles/external.xml` and set `SBC_ADDRESS`, or use the trunk API above.
+| Service | Docker Compose | KinD NodePort | K3s NodePort |
+|---------|---------------|---------------|--------------|
+| Gateway HTTP | 8080 | 30080 | 30080 |
+| Gateway SIP | 5060 or 5070 | 30062 | 5062 (hostNetwork) |
+| RTP pool | 30000-30050 | 30000-30020 | 30000-30100 (hostNetwork) |
+| UI | 3000 | 30030 | 30030 |
+| Whisper STT | 8000 | internal | 30085 |
+| PostgreSQL | 5432 | internal | internal |
+| Redis | 6379 | internal | internal |
+| ChromaDB | 8200 | internal | internal |
+| Prometheus | 9090 | 30090 | 30090 |
+| Grafana | 3001 | 30090 | 30090 |
 
 ---
 
 ## Logs & Debugging
 
 ### Docker Compose
+
 ```bash
-# All services
-docker compose -f docker-compose.sip.yml logs -f
-
-# Specific service
-docker compose -f docker-compose.sip.yml logs -f gateway
-docker compose -f docker-compose.sip.yml logs -f freeswitch
-docker compose -f docker-compose.sip.yml logs -f whisper
-
-# Gateway call activity
-docker logs voiceagent-gateway-1 | grep -E 'heard|replied|suggestion|summary'
-
-# FreeSWITCH SIP/media
-docker logs voiceagent-freeswitch-1 | grep -v event_socket | grep -v "Ping failed"
+docker compose -f <file> logs -f              # All services
+docker compose -f <file> logs -f gateway       # Gateway only
+docker compose -f <file> logs -f whisper       # Whisper STT
 ```
 
-### Kubernetes
+### Kubernetes (KinD & K3s)
+
 ```bash
-# Pod status
-make status
-
-# Per-service logs
-make logs-gw        # Gateway
-make logs-fs        # FreeSWITCH
-make logs-whisper   # Whisper STT
-make logs-piper     # Piper TTS
-make logs-ui        # Next.js UI
-make logs-postgres  # PostgreSQL
-make logs-redis     # Redis
-make logs-chromadb  # ChromaDB
-
-# Istio mesh diagnostics (cloud/on-prem)
-make mesh-status
-istioctl analyze -n voiceagent
-```
-
----
-
-## Cleanup
-
-### Docker Compose
-```bash
-# Stop all services
-docker compose -f docker-compose.sip.yml down
-
-# Stop and remove all data (PostgreSQL, ChromaDB volumes)
-docker compose -f docker-compose.sip.yml down -v
-```
-
-### Kubernetes
-```bash
-# Tear down services (keep cluster)
-make platform-undeploy
-
-# Tear down everything (cluster + images)
-make clean
+make status          # Pod + service overview
+make logs-gw         # Gateway logs
+make logs-whisper    # Whisper STT logs
+make logs-ui         # UI logs
+make logs-postgres   # PostgreSQL logs
+make logs-redis      # Redis logs
 ```
 
 ---
@@ -493,18 +359,14 @@ make clean
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Gateway: `GCP_PROJECT_ID is required` | Missing env var | `export ANTHROPIC_VERTEX_PROJECT_ID=your-project` |
-| FreeSWITCH: `Error Creating SIP UA` | Port conflict from previous pod | Delete pod and wait 30s: `kubectl delete pod -l app=freeswitch` |
-| Whisper: slow first request | Model downloading | Wait 30-60s for `faster-whisper-base.en` to download |
-| Piper: German voice | Wrong env var | Set `MODEL_DOWNLOAD_LINK` in docker-compose |
-| SIP call: no audio | RTP port mismatch | Ensure `EXT_IP` matches your LAN IP |
-| Co-pilot: no suggestions | RAG empty | Index documents first via `POST /api/documents` |
-| UI: 404 on pages | Old build | Rebuild UI: `docker compose up -d --build ui` |
-| API: 401 Unauthorized | Missing or expired token | Re-run login to get a fresh `$TOKEN` |
-| UI: "Cannot connect to gateway" | CORS or gateway down | Check gateway is running and `NEXT_PUBLIC_GATEWAY_URL` is set |
-| K8s: Pod `ImagePullBackOff` | Image not in KinD | Run `make load-all` to load images into KinD |
-| K8s: Pod `Pending` (PVC) | No storage provisioner | KinD uses local-path by default; cloud needs storageClassName |
-| K8s: Istio sidecar not injecting | Namespace label missing | Check `kubectl get ns voiceagent --show-labels` for `istio-injection=enabled` |
-| K8s: FreeSWITCH no SIP | hostNetwork not set | Local overlay uses hostNetwork; cloud uses LoadBalancer (`make freeswitch-ip`) |
-| K8s: Service unreachable | NetworkPolicy blocking | Check `kubectl -n voiceagent get networkpolicies` and verify source pod is allowed |
-| SIP: no SIPREC sessions | Wrong mode | Set `VOICEAGENT_MODE=standalone` in docker-compose |
+| `GCP_PROJECT_ID is required` | Missing env var | `export ANTHROPIC_VERTEX_PROJECT_ID=your-project` or ignore (non-LLM features still work) |
+| Whisper slow on first request | Model downloading | Wait 30-60s for model download |
+| SIP call: no audio | Wrong IP for RTP | Set `EXT_IP` (Compose) or `EXTERNAL_IP` (K3s) to correct IP |
+| UI: "Cannot connect to gateway" | Gateway URL mismatch | Check `NEXT_PUBLIC_GATEWAY_URL` matches gateway address |
+| API: 401 Unauthorized | Missing/expired token | Re-run login to get fresh `$TOKEN` |
+| K8s: `ImagePullBackOff` | Image not loaded/pushed | KinD: `make load-all`. K3s: `make push` + `make registry-secret` |
+| K8s: Pod `Pending` (PVC) | No storage provisioner | KinD: uses local-path. K3s/Civo: set `storageClassName: civo-volume` |
+| K3s: `generate-k3s` fails | Missing env vars | Set `EXTERNAL_IP` and `REGISTRY` before running make targets |
+| K3s: Agent stuck "On Call" | Stale DB state from restart | `kubectl -n voiceagent exec deployment/postgres -- psql -U voiceagent -d voiceagent -c "UPDATE agents SET status='Available', active_calls=0;"` |
+| K3s: Whisper unreachable | DNS from hostNetwork | Whisper uses headless service (`whisper-headless.voiceagent.svc.cluster.local`) |
+| Agent STT hallucinations | PCMU codec quality | Gateway uses Opus for WebRTC agent audio; ensure browser supports it |
