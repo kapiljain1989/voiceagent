@@ -470,33 +470,34 @@ func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speak
 		return
 	}
 
-	rmsRaw := rmsEnergy(pcm)
-
-	// Amplify quiet telephony audio (G.711 decodes to low amplitude)
-	amplified := make([]byte, len(pcm))
-	copy(amplified, pcm)
-	const gain = 8
-	for i := 0; i < len(amplified)-1; i += 2 {
-		s16 := int16(amplified[i]) | int16(amplified[i+1])<<8
-		v := int32(s16) * gain
-		if v > 32767 {
-			v = 32767
-		} else if v < -32768 {
-			v = -32768
-		}
-		amplified[i] = byte(v)
-		amplified[i+1] = byte(v >> 8)
-	}
-	pcm = amplified
-
-	rmsAmp := rmsEnergy(pcm)
-	s.log.Info("STT audio levels", "speaker", speaker, "rms_raw", fmt.Sprintf("%.1f", rmsRaw), "rms_amplified", fmt.Sprintf("%.1f", rmsAmp), "pcm_bytes", len(pcm))
+	rms := rmsEnergy(pcm)
+	s.log.Info("STT audio levels", "speaker", speaker, "rms", fmt.Sprintf("%.1f", rms), "pcm_bytes", len(pcm))
 
 	// Skip whisper on silence — avoids hallucinations and saves CPU
-	const silenceThreshold = 1200.0
-	if rmsAmp < silenceThreshold {
-		s.log.Info("STT chunk skipped (silence)", "speaker", speaker, "rms", fmt.Sprintf("%.1f", rmsAmp))
+	const silenceThreshold = 150.0
+	if rms < silenceThreshold {
+		s.log.Info("STT chunk skipped (silence)", "speaker", speaker, "rms", fmt.Sprintf("%.1f", rms))
 		return
+	}
+
+	// Amplify quiet telephony audio (SIP PCMU caller ~70-1100 RMS)
+	// Skip for loud Opus agent audio (~1000-1600 RMS)
+	if rms < 1000 {
+		amplified := make([]byte, len(pcm))
+		copy(amplified, pcm)
+		const gain = 6
+		for i := 0; i < len(amplified)-1; i += 2 {
+			s16 := int16(amplified[i]) | int16(amplified[i+1])<<8
+			v := int32(s16) * gain
+			if v > 32767 {
+				v = 32767
+			} else if v < -32768 {
+				v = -32768
+			}
+			amplified[i] = byte(v)
+			amplified[i+1] = byte(v >> 8)
+		}
+		pcm = amplified
 	}
 
 	wav := buildWAV(pcm, sampleRate, 1, 16)
@@ -554,6 +555,10 @@ func (s *siprecSession) whisperTranscribe(ctx context.Context, wav []byte) (stri
 	part.Write(wav)
 	w.WriteField("model", "Systran/faster-whisper-base.en")
 	w.WriteField("response_format", "json")
+	w.WriteField("language", "en")
+	w.WriteField("temperature", "0")
+	w.WriteField("condition_on_previous_text", "false")
+	w.WriteField("no_speech_threshold", "0.6")
 	w.Close()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", s.gw.cfg.STTURL, &body)

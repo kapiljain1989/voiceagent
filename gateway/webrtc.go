@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	pionopus "github.com/pion/opus"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 )
@@ -47,10 +48,23 @@ func webrtcSettingEngine() webrtc.SettingEngine {
 	return se
 }
 
-// newPCMUPeerConnection creates a PeerConnection that only supports PCMU codec.
-// This forces the browser to send PCMU (not Opus), so we can decode without CGO.
-func newPCMUPeerConnection(config webrtc.Configuration) (*webrtc.PeerConnection, error) {
+// newBridgePeerConnection creates a PeerConnection with Opus (preferred) + PCMU.
+// Browser sends Opus for high-quality agent mic audio; PCMU is used for outgoing caller audio.
+func newBridgePeerConnection(config webrtc.Configuration) (*webrtc.PeerConnection, error) {
 	me := &webrtc.MediaEngine{}
+	// Opus first — browser prefers it for sending
+	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    webrtc.MimeTypeOpus,
+			ClockRate:   48000,
+			Channels:    2,
+			SDPFmtpLine: "minptime=10;useinbandfec=1",
+		},
+		PayloadType: 111,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return nil, err
+	}
+	// PCMU fallback + used for outgoing track
 	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypePCMU,
@@ -134,8 +148,8 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// PCMU-only PC so browser sends PCMU (decodable without Opus/CGO)
-	pc, err := newPCMUPeerConnection(config)
+	// Opus+PCMU PC: browser sends Opus (high quality mic), we send PCMU (caller audio)
+	pc, err := newBridgePeerConnection(config)
 	if err != nil {
 		log.Error("peer connection", "err", err)
 		http.Error(w, "peer connection failed", http.StatusInternalServerError)
@@ -176,13 +190,26 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 	wm.sessions[callID] = sess
 	wm.mu.Unlock()
 
-	// Agent's mic audio → decode PCMU → send back to caller via RTP or WebSocket + copilot
+	// Agent's mic audio → decode Opus/PCMU → send to caller via RTP + copilot STT
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Info("agent audio track received", "codec", track.Codec().MimeType,
+		codec := track.Codec().MimeType
+		isOpus := strings.EqualFold(codec, "audio/opus")
+		log.Info("agent audio track received", "codec", codec, "opus", isOpus,
 			"rtp_path", siprecSess.rtpSession != nil,
 			"ws_path", siprecSess.callerConn != nil)
+
+		var opusDec pionopus.Decoder
+		if isOpus {
+			if err := opusDec.Init(48000, 1); err != nil {
+				log.Error("opus decoder init failed", "err", err)
+				return
+			}
+		}
+
 		go func() {
 			agentFrames := 0
+			opusPCMBuf := make([]int16, 48000) // max 1s at 48kHz
+
 			for {
 				select {
 				case <-ctx.Done():
@@ -200,9 +227,37 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 
 				agentFrames++
 
-				// Decode for copilot pipeline (16kHz for STT)
-				pcm8k := DecodeG711Ulaw(pkt.Payload)
-				pcm16k := resample(pcm8k, 8000, 16000)
+				var pcm16k []byte
+				var ulawForCaller []byte
+
+				if isOpus {
+					// Opus → PCM int16 at 48kHz
+					n, decErr := opusDec.DecodeToInt16(pkt.Payload, opusPCMBuf)
+					if decErr != nil {
+						if agentFrames <= 3 {
+							log.Error("opus decode", "err", decErr, "frame", agentFrames)
+						}
+						continue
+					}
+
+					// int16 → bytes (L16)
+					pcm48k := make([]byte, n*2)
+					for i := 0; i < n; i++ {
+						binary.LittleEndian.PutUint16(pcm48k[i*2:], uint16(opusPCMBuf[i]))
+					}
+
+					// 48kHz → 16kHz for STT
+					pcm16k = resample(pcm48k, 48000, 16000)
+
+					// 48kHz → 8kHz → G.711 for caller
+					pcm8k := resample(pcm48k, 48000, 8000)
+					ulawForCaller = EncodeG711Ulaw(pcm8k)
+				} else {
+					// PCMU fallback path
+					pcm8k := DecodeG711Ulaw(pkt.Payload)
+					pcm16k = resample(pcm8k, 8000, 16000)
+					ulawForCaller = pkt.Payload
+				}
 
 				// Conference mode: feed mixer instead of direct send
 				if siprecSess.conference != nil {
@@ -217,12 +272,12 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				// Send agent voice to caller: pass PCMU through directly (avoid double resample)
+				// Send agent voice to caller via RTP
 				if siprecSess.rtpSession != nil && siprecSess.rtpSession.listener != nil {
 					if agentFrames == 1 {
-						log.Info("RTP send starting", "remote", siprecSess.rtpSession.listener.RemoteAddrStr(), "payload_bytes", len(pkt.Payload))
+						log.Info("RTP send starting", "remote", siprecSess.rtpSession.listener.RemoteAddrStr(), "payload_bytes", len(ulawForCaller), "opus", isOpus)
 					}
-					if err := siprecSess.rtpSession.listener.SendG711(pkt.Payload); err != nil {
+					if err := siprecSess.rtpSession.listener.SendG711(ulawForCaller); err != nil {
 						if agentFrames <= 5 {
 							log.Error("RTP send failed", "err", err, "frame", agentFrames)
 						}

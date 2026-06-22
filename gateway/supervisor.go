@@ -161,7 +161,7 @@ func (gw *gateway) handleSupervisorMonitor(w http.ResponseWriter, r *http.Reques
 		},
 	}
 
-	pc, err := newPCMUPeerConnection(config)
+	pc, err := newBridgePeerConnection(config)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "peer connection failed"})
 		return
