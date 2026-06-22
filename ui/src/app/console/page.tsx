@@ -468,11 +468,9 @@ export default function ConsolePage() {
       setCallState("disconnected");
       setSiprecCallId(null);
       setIncomingCall(null);
+      resetCallData();
       setTimeout(() => {
         setCallState("idle");
-        if (transcriptEntries.length > 0) {
-          setShowPostCallSummary(true);
-        }
       }, 1500);
     }
   }, [sseStream.callStateFromSSE]);
@@ -529,11 +527,9 @@ export default function ConsolePage() {
     setConferenceActive(false);
     setConferenceParty(null);
     setShowTransfer(false);
+    resetCallData();
     setTimeout(() => {
       setCallState("idle");
-      if (transcriptEntries.length > 0) {
-        setShowPostCallSummary(true);
-      }
     }, 1500);
   }
 

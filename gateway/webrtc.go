@@ -628,6 +628,11 @@ func (wm *WebRTCManager) handleHangup(w http.ResponseWriter, r *http.Request) {
 	if siprecCallID != req.CallID {
 		slog.Info("ending SIPREC session from bridge hangup", "siprec_call_id", siprecCallID)
 
+		// Broadcast call ended BEFORE cleanup so SSE clients receive it
+		if wm.gw != nil {
+			wm.gw.broadcastCallState(siprecCallID, "ended")
+		}
+
 		// Send SIP BYE to caller's phone
 		if wm.gw.sipServer != nil {
 			wm.gw.sipServer.SendBYE(siprecCallID)
