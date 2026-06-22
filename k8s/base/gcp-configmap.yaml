@@ -3,5 +3,5 @@ kind: ConfigMap
 metadata:
   name: gcp-config
 data:
-  project-id: "itpc-gcp-hcm-pe-eng-claude"
+  project-id: "your-project-id"
   region: "us-east5"

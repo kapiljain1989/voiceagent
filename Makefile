@@ -8,9 +8,9 @@ PIPER_IMAGE   := waveoffire/piper-tts-server:latest
 UI_IMAGE      := voiceagent/ui:latest
 OVERLAY       ?= local
 
-# Registry for K3s / remote cluster deployment
-REGISTRY      ?= quay.io/rh-ee-kapjain
-EXTERNAL_IP   ?= 212.2.244.184
+# Registry for K3s / remote cluster deployment (set via env vars)
+REGISTRY      ?=
+EXTERNAL_IP   ?=
 REG_GW_IMAGE  := $(REGISTRY)/voiceagent-gateway:latest
 REG_UI_IMAGE  := $(REGISTRY)/voiceagent-ui:latest
 
@@ -21,7 +21,7 @@ REG_UI_IMAGE  := $(REGISTRY)/voiceagent-ui:latest
         port-forward-ui port-forward-grafana port-forward-prometheus \
         demos demos-gifs demos-clean \
         sbc-lab sbc-lab-down sbc-test \
-        build-k3s push deploy-k3s undeploy-k3s registry-secret
+        generate-k3s build-k3s push deploy-k3s undeploy-k3s registry-secret
 
 all: kind-up build-all load-all secret deploy-local
 
@@ -269,7 +269,16 @@ demos-clean:
 
 ## ─── K3s / Remote Cluster ─────────────────────────────────────────
 
-build-k3s:
+# Generate K3s overlay files from templates. Requires EXTERNAL_IP and REGISTRY env vars.
+#   EXTERNAL_IP=1.2.3.4 REGISTRY=quay.io/myorg make generate-k3s
+generate-k3s:
+	@if [ -z "$(EXTERNAL_IP)" ]; then echo "ERROR: EXTERNAL_IP not set. Usage: EXTERNAL_IP=x.x.x.x REGISTRY=quay.io/org make generate-k3s"; exit 1; fi
+	@if [ -z "$(REGISTRY)" ]; then echo "ERROR: REGISTRY not set. Usage: EXTERNAL_IP=x.x.x.x REGISTRY=quay.io/org make generate-k3s"; exit 1; fi
+	@sed 's|__EXTERNAL_IP__|$(EXTERNAL_IP)|g' k8s/overlays/k3s/external-ip-configmap.yaml.tpl > k8s/overlays/k3s/external-ip-configmap.yaml
+	@sed -e 's|__EXTERNAL_IP__|$(EXTERNAL_IP)|g' -e 's|__REGISTRY__|$(REGISTRY)|g' k8s/overlays/k3s/kustomization.yaml.tpl > k8s/overlays/k3s/kustomization.yaml
+	@echo "K3s overlay generated for $(EXTERNAL_IP) / $(REGISTRY)"
+
+build-k3s: generate-k3s
 	docker buildx build --platform linux/amd64 -t $(REG_GW_IMAGE) --load gateway/
 	docker buildx build --platform linux/amd64 \
 		--build-arg NEXT_PUBLIC_GATEWAY_URL=http://$(EXTERNAL_IP):30080 \
@@ -288,7 +297,7 @@ registry-secret:
 		--docker-password="$${REGISTRY_PASSWORD}" \
 		--dry-run=client -o yaml | kubectl apply -f -
 
-deploy-k3s:
+deploy-k3s: generate-k3s
 	@kubectl create namespace voiceagent --dry-run=client -o yaml | kubectl apply -f -
 	kubectl apply -k k8s/overlays/k3s
 	kubectl -n voiceagent rollout status deployment/postgres --timeout=60s

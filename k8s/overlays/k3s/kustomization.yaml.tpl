@@ -10,10 +10,10 @@ resources:
 
 images:
   - name: voiceagent/gateway
-    newName: quay.io/rh-ee-kapjain/voiceagent-gateway
+    newName: __REGISTRY__/voiceagent-gateway
     newTag: latest
   - name: voiceagent/ui
-    newName: quay.io/rh-ee-kapjain/voiceagent-ui
+    newName: __REGISTRY__/voiceagent-ui
     newTag: latest
 
 patches:
@@ -75,7 +75,7 @@ patches:
         path: /spec/template/spec/containers/0/env/4
         value:
           name: NEXT_PUBLIC_GATEWAY_URL
-          value: "http://212.2.244.184:30080"
+          value: "http://__EXTERNAL_IP__:30080"
 
   # Postgres: use subdir for PGDATA (Civo volumes have lost+found)
   - target:

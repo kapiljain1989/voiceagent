@@ -3,4 +3,4 @@ kind: ConfigMap
 metadata:
   name: external-ip
 data:
-  external-ip: "212.2.244.184"
+  external-ip: "__EXTERNAL_IP__"

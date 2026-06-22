@@ -39,6 +39,10 @@ demos/gifs/*.gif
 demos/gifs/*.mp4
 demos/gifs/*.webm
 
+# Generated K3s overlay files (contain deployment-specific IPs/registry)
+k8s/overlays/k3s/external-ip-configmap.yaml
+k8s/overlays/k3s/kustomization.yaml
+
 # Claude
 .claude/
 *.log
