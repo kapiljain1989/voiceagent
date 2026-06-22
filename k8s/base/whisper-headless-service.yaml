@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: whisper-headless
+  namespace: voiceagent
+spec:
+  clusterIP: None
+  selector:
+    app: whisper
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP

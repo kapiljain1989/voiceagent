@@ -204,7 +204,14 @@ export function useWebRTC(): UseWebRTCReturn {
     setCallState("dialing");
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Microphone access requires HTTPS. Access the UI via https:// or localhost.");
+      }
+      console.log("[WebRTC] bridge: requesting microphone...", { siprecCallId, agentId });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      console.log("[WebRTC] bridge: microphone acquired");
       localStreamRef.current = stream;
 
       const pc = new RTCPeerConnection({
@@ -248,6 +255,7 @@ export function useWebRTC(): UseWebRTCReturn {
         setTimeout(resolve, 3000);
       });
 
+      console.log("[WebRTC] bridge: sending offer to gateway...");
       const res = await authFetch("/api/webrtc/bridge", {
         method: "POST",
         body: JSON.stringify({
@@ -258,9 +266,14 @@ export function useWebRTC(): UseWebRTCReturn {
         }),
       });
 
-      if (!res.ok) throw new Error(`Bridge failed: ${res.status}`);
+      if (!res.ok) {
+        const body = await res.text();
+        console.error("[WebRTC] bridge API error:", res.status, body);
+        throw new Error(`Bridge failed: ${res.status} ${body}`);
+      }
 
       const answer = await res.json();
+      console.log("[WebRTC] bridge: gateway answered, setting remote SDP");
       setCallId(answer.call_id);
 
       await pc.setRemoteDescription({
@@ -268,8 +281,10 @@ export function useWebRTC(): UseWebRTCReturn {
         sdp: answer.sdp,
       });
 
+      console.log("[WebRTC] bridge: established");
       statsIntervalRef.current = setInterval(collectStats, 2000);
     } catch (err: any) {
+      console.error("[WebRTC] bridge failed:", err);
       setError(err.message || "Bridge failed");
       setCallState("idle");
       cleanup();

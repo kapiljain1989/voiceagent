@@ -50,6 +50,13 @@ func (r *RTPListener) Close() {
 	}
 }
 
+func (r *RTPListener) RemoteAddrStr() string {
+	if r.remoteAddr == nil {
+		return "<nil>"
+	}
+	return r.remoteAddr.String()
+}
+
 func (r *RTPListener) SetRemoteAddr(host string, port int) error {
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
@@ -85,13 +92,27 @@ func (r *RTPListener) ReceiveAndDecode(ctx context.Context, pcmCh chan []byte, r
 			continue
 		}
 
-		// Learn the remote address from the first packet (for sending back)
-		if r.remoteAddr == nil && sender != nil {
+		// Learn/update the remote address from the first packet (NAT may differ from SDP)
+		if sender != nil && (r.remoteAddr == nil || frameCount == 0) {
+			if r.remoteAddr != nil && r.remoteAddr.String() != sender.String() {
+				log.Info("RTP remote address updated (NAT)", "sdp", r.remoteAddr.String(), "actual", sender.String())
+			}
 			r.remoteAddr = sender
-			log.Info("RTP remote address learned", "addr", sender.String())
+			if frameCount == 0 {
+				log.Info("RTP remote address learned", "addr", sender.String())
+			}
 		}
 
 		if err := pkt.Unmarshal(buf[:n]); err != nil {
+			continue
+		}
+
+		// Skip non-audio payloads (comfort noise PT 13, DTMF PT 101, proprietary PTs)
+		expectedPT := PayloadTypeForCodec(r.codec)
+		if pkt.PayloadType != expectedPT {
+			if frameCount == 0 {
+				log.Debug("skipping non-audio RTP", "pt", pkt.PayloadType, "expected", expectedPT)
+			}
 			continue
 		}
 

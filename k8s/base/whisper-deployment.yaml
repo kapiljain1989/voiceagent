@@ -21,6 +21,8 @@ spec:
           env:
             - name: WHISPER__MODEL
               value: "Systran/faster-whisper-base.en"
+            - name: WHISPER__INFERENCE_THREADS
+              value: "4"
           ports:
             - containerPort: 8000
               protocol: TCP
@@ -31,8 +33,8 @@ spec:
             periodSeconds: 10
           resources:
             requests:
-              cpu: 500m
-              memory: 512Mi
-            limits:
               cpu: "2"
               memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 2Gi

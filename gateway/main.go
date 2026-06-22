@@ -206,16 +206,16 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
+	var gcpCreds *google.Credentials
 	if cfg.GCPProjectID == "" {
-		slog.Error("GCP_PROJECT_ID (or ANTHROPIC_VERTEX_PROJECT_ID) is required")
-		os.Exit(1)
-	}
-
-	ctx := context.Background()
-	gcpCreds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
-	if err != nil {
-		slog.Error("gcp credentials", "err", err)
-		os.Exit(1)
+		slog.Warn("GCP_PROJECT_ID not set — LLM calls will be unavailable")
+	} else {
+		ctx := context.Background()
+		var err error
+		gcpCreds, err = google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+		if err != nil {
+			slog.Warn("gcp credentials not available — LLM calls will be unavailable", "err", err)
+		}
 	}
 
 	// Initialize database with migrations
@@ -818,6 +818,9 @@ func (s *session) streamClaude(ctx context.Context, messages []claudeMessage) (s
 		"stream":            true,
 	})
 
+	if s.gw.gcpCreds == nil {
+		return "", fmt.Errorf("gcp credentials not configured")
+	}
 	tok, err := s.gw.gcpCreds.TokenSource.Token()
 	if err != nil {
 		return "", fmt.Errorf("gcp token: %w", err)
@@ -977,6 +980,9 @@ func (s *session) streamClaudeNoSplit(ctx context.Context, messages []claudeMess
 		"stream":            true,
 	})
 
+	if s.gw.gcpCreds == nil {
+		return "", fmt.Errorf("gcp credentials not configured")
+	}
 	tok, err := s.gw.gcpCreds.TokenSource.Token()
 	if err != nil {
 		return "", fmt.Errorf("gcp token: %w", err)
@@ -1273,10 +1279,10 @@ func isWhisperHallucination(text string) bool {
 
 	// Exact match hallucinations (1-3 word phrases that Whisper generates from silence)
 	exact := []string{
-		"thank you", "thanks", "thanks for watching", "thanks for listening",
-		"bye", "goodbye", "you", "okay", "oh", "yeah", "yes", "no",
-		"hmm", "uh", "um", "so", "i dont know",
-		"all right", "alright", "right", "sure",
+		"thanks for watching", "thanks for listening",
+		"bye", "goodbye", "oh",
+		"hmm", "uh", "um",
+		"all right", "alright",
 	}
 	for _, h := range exact {
 		if cleaned == h {

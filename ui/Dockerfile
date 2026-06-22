@@ -3,6 +3,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+ARG NEXT_PUBLIC_GATEWAY_URL=http://localhost:8080
+ENV NEXT_PUBLIC_GATEWAY_URL=$NEXT_PUBLIC_GATEWAY_URL
 ENV DATABASE_URL="postgresql://localhost:5432/voiceagent"
 RUN npx prisma generate
 RUN npm run build

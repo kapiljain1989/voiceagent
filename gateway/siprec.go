@@ -373,10 +373,16 @@ func (s *siprecSession) agentSTT(ctx context.Context) {
 
 func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker string) {
 	// Time-based chunking: collect audio in fixed windows, let Whisper handle VAD.
-	// This avoids RMS-based VAD problems with low-amplitude G.711 telephony audio.
-	const chunkMs = 3000
-	const chunkFrames = chunkMs / vadFrameMs // 150 frames = 3 seconds
+	// 5-second chunks balance copilot latency vs. transcription accuracy.
+	const chunkMs = 5000
+	const chunkFrames = chunkMs / vadFrameMs // 250 frames = 5 seconds
 	warmupFrames := 500 / vadFrameMs         // skip first 0.5s
+
+	liveSTT := true
+
+	// Semaphore: only one whisper request in-flight at a time per speaker.
+	// If whisper is busy, skip the chunk to avoid queue buildup.
+	whisperBusy := make(chan struct{}, 1)
 
 	var audioBuf []byte
 	frameCount := 0
@@ -387,7 +393,7 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 		case <-ctx.Done():
 			s.log.Info("STT context done", "speaker", speaker, "frames", sttFrames)
 			if len(audioBuf) > 0 {
-				flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				flushCtx, flushCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				s.transcribeAndEmit(flushCtx, audioBuf, speaker)
 				flushCancel()
 			}
@@ -396,7 +402,7 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 			if !ok {
 				s.log.Info("STT channel closed", "speaker", speaker, "frames", sttFrames)
 				if len(audioBuf) > 0 {
-					flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					flushCtx, flushCancel := context.WithTimeout(context.Background(), 30*time.Second)
 					s.transcribeAndEmit(flushCtx, audioBuf, speaker)
 					flushCancel()
 				}
@@ -433,12 +439,26 @@ func (s *siprecSession) runSTT(ctx context.Context, pcmCh chan []byte, speaker s
 
 			audioBuf = append(audioBuf, pcm...)
 
-			// Flush every chunkFrames (3 seconds)
+			if !liveSTT {
+				continue
+			}
+
+			// Flush every chunkFrames (5 seconds)
 			if (frameCount-warmupFrames)%chunkFrames == 0 && len(audioBuf) > 0 {
 				buf := make([]byte, len(audioBuf))
 				copy(buf, audioBuf)
 				audioBuf = audioBuf[:0]
-				go s.transcribeAndEmit(ctx, buf, speaker)
+
+				select {
+				case whisperBusy <- struct{}{}:
+					s.log.Info("STT chunk ready", "speaker", speaker, "pcm_bytes", len(buf), "frame", frameCount)
+					go func() {
+						defer func() { <-whisperBusy }()
+						s.transcribeAndEmit(ctx, buf, speaker)
+					}()
+				default:
+					s.log.Info("STT chunk skipped (whisper busy)", "speaker", speaker, "frame", frameCount)
+				}
 			}
 		}
 	}
@@ -449,6 +469,8 @@ func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speak
 	if len(pcm) < minBytes {
 		return
 	}
+
+	rmsRaw := rmsEnergy(pcm)
 
 	// Amplify quiet telephony audio (G.711 decodes to low amplitude)
 	amplified := make([]byte, len(pcm))
@@ -466,6 +488,16 @@ func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speak
 		amplified[i+1] = byte(v >> 8)
 	}
 	pcm = amplified
+
+	rmsAmp := rmsEnergy(pcm)
+	s.log.Info("STT audio levels", "speaker", speaker, "rms_raw", fmt.Sprintf("%.1f", rmsRaw), "rms_amplified", fmt.Sprintf("%.1f", rmsAmp), "pcm_bytes", len(pcm))
+
+	// Skip whisper on silence — avoids hallucinations and saves CPU
+	const silenceThreshold = 1200.0
+	if rmsAmp < silenceThreshold {
+		s.log.Info("STT chunk skipped (silence)", "speaker", speaker, "rms", fmt.Sprintf("%.1f", rmsAmp))
+		return
+	}
 
 	wav := buildWAV(pcm, sampleRate, 1, 16)
 	text, err := s.whisperTranscribe(ctx, wav)
@@ -513,12 +545,14 @@ func (s *siprecSession) transcribeAndEmit(ctx context.Context, pcm []byte, speak
 	}
 }
 
+var whisperHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 func (s *siprecSession) whisperTranscribe(ctx context.Context, wav []byte) (string, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
 	part, _ := w.CreateFormFile("file", "audio.wav")
 	part.Write(wav)
-	w.WriteField("model", "Systran/faster-whisper-small.en")
+	w.WriteField("model", "Systran/faster-whisper-base.en")
 	w.WriteField("response_format", "json")
 	w.Close()
 
@@ -528,7 +562,8 @@ func (s *siprecSession) whisperTranscribe(ctx context.Context, wav []byte) (stri
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 
-	resp, err := http.DefaultClient.Do(req)
+	s.log.Debug("whisper request", "url", s.gw.cfg.STTURL, "wav_bytes", len(wav))
+	resp, err := whisperHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -628,6 +663,10 @@ func (s *siprecSession) coachWorker(ctx context.Context) {
 }
 
 func (s *siprecSession) streamCoachWithRAG(ctx context.Context, history []claudeMessage, ragContext string) (*Suggestion, error) {
+	if s.gw.gcpCreds == nil {
+		return &Suggestion{Category: "none"}, nil
+	}
+
 	systemPrompt := coachSystemPrompt
 	if ragContext != "" {
 		systemPrompt = ragContext + "\n\nUsing the knowledge base context above, " + coachSystemPrompt
@@ -870,6 +909,10 @@ func callIDToUUID(callID string) string {
 }
 
 func (s *siprecSession) generateSummary(ctx context.Context, transcript string) (string, error) {
+	if s.gw.gcpCreds == nil {
+		return `{"summary":"LLM not configured — no GCP credentials","action_items":[],"commitments_made":[],"sentiment":"neutral"}`, nil
+	}
+
 	url := fmt.Sprintf(
 		"https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/anthropic/models/%s:rawPredict",
 		s.gw.cfg.GCPRegion, s.gw.cfg.GCPProjectID, s.gw.cfg.GCPRegion, s.gw.cfg.ClaudeModel,

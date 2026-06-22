@@ -11,6 +11,10 @@ resources:
   # STT
   - whisper-deployment.yaml
   - whisper-service.yaml
+  - whisper-headless-service.yaml
+  # TTS
+  - piper-deployment.yaml
+  - piper-service.yaml
   # Data stores
   - postgres-deployment.yaml
   - postgres-service.yaml

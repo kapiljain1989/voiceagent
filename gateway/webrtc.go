@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,17 @@ type WebRTCSession struct {
 	onHold     bool
 }
 
+// webrtcSettingEngine creates a SettingEngine with a fixed UDP port range
+// so ICE candidates use ports that are open in the cloud firewall.
+func webrtcSettingEngine() webrtc.SettingEngine {
+	se := webrtc.SettingEngine{}
+	se.SetEphemeralUDPPortRange(30200, 30300)
+	if ip := os.Getenv("EXTERNAL_IP"); ip != "" {
+		se.SetNAT1To1IPs([]string{ip}, webrtc.ICECandidateTypeHost)
+	}
+	return se
+}
+
 // newPCMUPeerConnection creates a PeerConnection that only supports PCMU codec.
 // This forces the browser to send PCMU (not Opus), so we can decode without CGO.
 func newPCMUPeerConnection(config webrtc.Configuration) (*webrtc.PeerConnection, error) {
@@ -49,7 +61,8 @@ func newPCMUPeerConnection(config webrtc.Configuration) (*webrtc.PeerConnection,
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return nil, err
 	}
-	api := webrtc.NewAPI(webrtc.WithMediaEngine(me))
+	se := webrtcSettingEngine()
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se))
 	return api.NewPeerConnection(config)
 }
 
@@ -92,9 +105,18 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slog.Info("WebRTC bridge lookup", "siprec_call_id", req.SIPRECCallID, "agent_id", req.AgentID)
+
 	// Find the existing SIPREC session
 	siprecSessionsMu.Lock()
 	siprecSess, exists := siprecSessions[req.SIPRECCallID]
+	if !exists {
+		keys := make([]string, 0, len(siprecSessions))
+		for k := range siprecSessions {
+			keys = append(keys, k)
+		}
+		slog.Warn("session not found", "wanted", req.SIPRECCallID, "available", keys)
+	}
 	siprecSessionsMu.Unlock()
 
 	if !exists {
@@ -176,11 +198,11 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				// PCMU payload → L16 PCM 8kHz → resample to 16kHz
+				agentFrames++
+
+				// Decode for copilot pipeline (16kHz for STT)
 				pcm8k := DecodeG711Ulaw(pkt.Payload)
 				pcm16k := resample(pcm8k, 8000, 16000)
-
-				agentFrames++
 
 				// Conference mode: feed mixer instead of direct send
 				if siprecSess.conference != nil {
@@ -195,12 +217,17 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				// Send agent voice to caller: prefer RTP path (standalone), fall back to WebSocket
+				// Send agent voice to caller: pass PCMU through directly (avoid double resample)
 				if siprecSess.rtpSession != nil && siprecSess.rtpSession.listener != nil {
-					if err := siprecSess.rtpSession.listener.SendPCM(pcm16k); err != nil {
-						if agentFrames == 1 {
-							log.Error("RTP send failed", "err", err)
+					if agentFrames == 1 {
+						log.Info("RTP send starting", "remote", siprecSess.rtpSession.listener.RemoteAddrStr(), "payload_bytes", len(pkt.Payload))
+					}
+					if err := siprecSess.rtpSession.listener.SendG711(pkt.Payload); err != nil {
+						if agentFrames <= 5 {
+							log.Error("RTP send failed", "err", err, "frame", agentFrames)
 						}
+					} else if agentFrames%500 == 0 {
+						log.Info("RTP send progress", "frames", agentFrames, "remote", siprecSess.rtpSession.listener.RemoteAddrStr())
 					}
 				} else if siprecSess.callerConn != nil {
 					if err := siprecSess.callerConn.WriteMessage(websocket.BinaryMessage, pcm16k); err != nil {
@@ -311,7 +338,16 @@ func (wm *WebRTCManager) handleBridge(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	log.Info("WebRTC bridge established (bidirectional)")
+	log.Info("WebRTC bridge established (bidirectional)",
+		"rtp_session", siprecSess.rtpSession != nil,
+		"rtp_listener", siprecSess.rtpSession != nil && siprecSess.rtpSession.listener != nil,
+		"rtp_remote", func() string {
+			if siprecSess.rtpSession != nil && siprecSess.rtpSession.listener != nil && siprecSess.rtpSession.listener.remoteAddr != nil {
+				return siprecSess.rtpSession.listener.remoteAddr.String()
+			}
+			return "<nil>"
+		}(),
+		"ws_path", siprecSess.callerConn != nil)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -353,7 +389,9 @@ func (wm *WebRTCManager) handleOffer(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	pc, err := webrtc.NewPeerConnection(config)
+	se := webrtcSettingEngine()
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
+	pc, err := api.NewPeerConnection(config)
 	if err != nil {
 		log.Error("create peer connection", "err", err)
 		http.Error(w, "peer connection failed", http.StatusInternalServerError)

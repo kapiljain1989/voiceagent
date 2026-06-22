@@ -8,13 +8,20 @@ PIPER_IMAGE   := waveoffire/piper-tts-server:latest
 UI_IMAGE      := voiceagent/ui:latest
 OVERLAY       ?= local
 
+# Registry for K3s / remote cluster deployment
+REGISTRY      ?= quay.io/rh-ee-kapjain
+EXTERNAL_IP   ?= 212.2.244.184
+REG_GW_IMAGE  := $(REGISTRY)/voiceagent-gateway:latest
+REG_UI_IMAGE  := $(REGISTRY)/voiceagent-ui:latest
+
 .PHONY: all kind-up kind-down build build-all load load-all deploy secret sbc-config undeploy \
         logs-gw logs-fs logs-whisper logs-piper logs-ui logs-postgres logs-redis logs-chromadb \
         clean status platform-deploy platform-undeploy deploy-local deploy-cloud deploy-on-prem \
         istio-install istio-uninstall mesh-status freeswitch-ip \
         port-forward-ui port-forward-grafana port-forward-prometheus \
         demos demos-gifs demos-clean \
-        sbc-lab sbc-lab-down sbc-test
+        sbc-lab sbc-lab-down sbc-test \
+        build-k3s push deploy-k3s undeploy-k3s registry-secret
 
 all: kind-up build-all load-all secret deploy-local
 
@@ -259,6 +266,43 @@ demos-gifs:
 
 demos-clean:
 	rm -f demos/gifs/*.gif demos/gifs/*.mp4 demos/gifs/*.webm
+
+## ─── K3s / Remote Cluster ─────────────────────────────────────────
+
+build-k3s:
+	docker buildx build --platform linux/amd64 -t $(REG_GW_IMAGE) --load gateway/
+	docker buildx build --platform linux/amd64 \
+		--build-arg NEXT_PUBLIC_GATEWAY_URL=http://$(EXTERNAL_IP):30080 \
+		-t $(REG_UI_IMAGE) --load ui/
+
+push: build-k3s
+	docker push $(REG_GW_IMAGE)
+	docker push $(REG_UI_IMAGE)
+
+registry-secret:
+	@kubectl create namespace voiceagent --dry-run=client -o yaml | kubectl apply -f -
+	@kubectl create secret docker-registry registry-credentials \
+		--namespace voiceagent \
+		--docker-server=$(REGISTRY) \
+		--docker-username="$${REGISTRY_USER}" \
+		--docker-password="$${REGISTRY_PASSWORD}" \
+		--dry-run=client -o yaml | kubectl apply -f -
+
+deploy-k3s:
+	@kubectl create namespace voiceagent --dry-run=client -o yaml | kubectl apply -f -
+	kubectl apply -k k8s/overlays/k3s
+	kubectl -n voiceagent rollout status deployment/postgres --timeout=60s
+	kubectl -n voiceagent rollout status deployment/redis --timeout=30s
+	kubectl -n voiceagent rollout status deployment/chromadb --timeout=60s
+	kubectl -n voiceagent rollout status deployment/whisper --timeout=120s
+	kubectl -n voiceagent rollout status deployment/piper --timeout=120s
+	kubectl -n voiceagent rollout status deployment/media-gateway --timeout=60s
+	kubectl -n voiceagent rollout status deployment/ui --timeout=60s
+	kubectl -n voiceagent rollout status deployment/prometheus --timeout=30s
+	kubectl -n voiceagent rollout status deployment/grafana --timeout=30s
+
+undeploy-k3s:
+	kubectl delete -k k8s/overlays/k3s --ignore-not-found
 
 ## ─── Housekeeping ────────────────────────────────────────────────
 

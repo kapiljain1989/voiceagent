@@ -20,6 +20,7 @@ type SIPServer struct {
 	gw       *gateway
 	ua       *sipgo.UserAgent
 	server   *sipgo.Server
+	client   *sipgo.Client
 	addr     string
 	rtpBase  int
 	rtpMu    sync.Mutex
@@ -63,6 +64,11 @@ func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
 		return nil, fmt.Errorf("sipgo server: %w", err)
 	}
 
+	client, err := sipgo.NewClient(ua)
+	if err != nil {
+		return nil, fmt.Errorf("sipgo client: %w", err)
+	}
+
 	// Initialize SIP security (IP whitelist, digest auth)
 	var sipSec *SIPSecurity
 	if database != nil {
@@ -73,6 +79,7 @@ func NewSIPServer(gw *gateway, listenAddr string) (*SIPServer, error) {
 		gw:       gw,
 		ua:       ua,
 		server:   server,
+		client:   client,
 		addr:     listenAddr,
 		rtpBase:  30000,
 		rtpNext:  30000,
@@ -525,6 +532,7 @@ func (s *SIPServer) handleBye(req *sip.Request, tx sip.ServerTransaction) {
 }
 
 // SendBYE sends a SIP BYE to the caller when the agent hangs up from Console.
+// Uses sipgo Client to send through the SIP server's listening port (5062).
 func (s *SIPServer) SendBYE(callID string) {
 	s.sessMu.Lock()
 	var sess *siprecRTPSession
@@ -541,55 +549,53 @@ func (s *SIPServer) SendBYE(callID string) {
 		return
 	}
 
-	localAddr := getLocalIP() + s.addr
+	host, port, err := net.SplitHostPort(sess.sipSource)
+	if err != nil {
+		host = sess.sipSource
+		port = "5060"
+	}
+	portNum := 5060
+	fmt.Sscanf(port, "%d", &portNum)
 
-	// Build BYE with correct From/To based on call direction
+	recipient := sip.Uri{Scheme: "sip", Host: host, Port: portNum}
+	byeReq := sip.NewRequest(sip.BYE, recipient)
+	byeReq.SetDestination(sess.sipSource)
+
+	// Set dialog headers based on call direction
 	var byeFrom, byeTo string
 	if sess.isOutbound {
-		// Outbound: we are the caller — From/To same as INVITE
 		byeFrom = sess.sipFrom
 		byeTo = fmt.Sprintf("%s;tag=%s", sess.sipTo, sess.toTag)
 	} else {
-		// Inbound: we are the callee — From/To swapped vs INVITE
 		byeFrom = fmt.Sprintf("%s;tag=%s", sess.sipTo, sess.toTag)
 		byeTo = fmt.Sprintf("%s;tag=%s", sess.sipFrom, sess.fromTag)
 	}
+	byeReq.AppendHeader(sip.NewHeader("From", byeFrom))
+	byeReq.AppendHeader(sip.NewHeader("To", byeTo))
+	byeReq.AppendHeader(sip.NewHeader("Call-ID", sess.sipCallID))
+	byeReq.AppendHeader(sip.NewHeader("CSeq", "2 BYE"))
+	byeReq.AppendHeader(sip.NewHeader("Max-Forwards", "70"))
+	byeReq.AppendHeader(sip.NewHeader("Content-Length", "0"))
 
-	bye := fmt.Sprintf(
-		"BYE sip:%s SIP/2.0\r\n"+
-			"Via: SIP/2.0/UDP %s;branch=z9hG4bK-%d\r\n"+
-			"From: %s\r\n"+
-			"To: %s\r\n"+
-			"Call-ID: %s\r\n"+
-			"CSeq: 2 BYE\r\n"+
-			"Max-Forwards: 70\r\n"+
-			"Content-Length: 0\r\n"+
-			"\r\n",
-		sess.sipSource,
-		localAddr, time.Now().UnixNano(),
-		byeFrom,
-		byeTo,
-		sess.sipCallID,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// Send BYE — use existing connection for outbound calls, new connection for inbound
-	if sess.sipConn != nil {
-		sess.sipConn.Write([]byte(bye))
-		slog.Info("SIP BYE sent via outbound connection", "call_id", callID, "target", sess.sipSource)
-	} else {
-		addr, err := net.ResolveUDPAddr("udp4", sess.sipSource)
-		if err != nil {
-			slog.Debug("SendBYE: resolve addr", "err", err, "source", sess.sipSource)
-			return
-		}
-		conn, err := net.DialUDP("udp4", nil, addr)
-		if err != nil {
-			slog.Debug("SendBYE: dial", "err", err)
-			return
-		}
-		defer conn.Close()
-		conn.Write([]byte(bye))
-		slog.Info("SIP BYE sent to caller", "call_id", callID, "target", sess.sipSource)
+	// ClientRequestAddVia adds Via header using the server's transport (port 5062)
+	tx, err := s.client.TransactionRequest(ctx, byeReq, sipgo.ClientRequestAddVia)
+	if err != nil {
+		slog.Error("SendBYE: transaction failed", "call_id", callID, "err", err, "target", sess.sipSource)
+		return
+	}
+	defer tx.Terminate()
+
+	slog.Info("SIP BYE sent", "call_id", callID, "target", sess.sipSource)
+
+	select {
+	case resp := <-tx.Responses():
+		slog.Info("SIP BYE response", "call_id", callID, "status", resp.StatusCode)
+	case <-tx.Done():
+	case <-ctx.Done():
+		slog.Warn("SendBYE: timeout waiting for response", "call_id", callID)
 	}
 }
 
